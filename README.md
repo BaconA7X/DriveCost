@@ -6,6 +6,14 @@ En el estado actual del proyecto, el consumo de combustible **se simula mediante
 
 El proyecto permite validar toda la cadena de adquisición y comunicación antes de sustituir el consumo simulado por datos reales procedentes del vehículo.
 
+## Instalación
+
+![Instalación](hardware.jpeg)
+
+## Esquema de conexiones
+
+![Esquema de conexiones](esquematico%20hardware.png)
+
 ## Arquitectura
 
 ```text
