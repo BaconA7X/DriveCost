@@ -10,6 +10,14 @@ Sus funciones son:
 - Conectarse a la red Wi-Fi.
 - Enviar la telemetría al broker mediante MQTT autenticado.
 
+## Instalación
+
+![Instalación](ESP32.jpeg)
+
+## Esquema de conexiones
+
+![Esquema de conexiones](esquematico%20esp32.png)
+
 ## Arquitectura
 
 ```text
