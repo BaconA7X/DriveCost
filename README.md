@@ -1,133 +1,130 @@
 # DriveCost
 
-**DriveCost** es un sistema de telemetría para vehículos diseñado para obtener datos del coche mediante CAN/OBD-II, combinarlos con información de posición GPS y enviarlos mediante MQTT para su posterior procesamiento, almacenamiento y visualización.
+DriveCost es un prototipo de sistema de telemetría vehicular que combina datos de consumo con posición GPS y los transmite mediante MQTT para su posterior procesamiento, almacenamiento y visualización.
 
-El objetivo principal es disponer de una plataforma capaz de relacionar el **consumo de combustible** con la **posición del vehículo**, permitiendo posteriormente analizar rutas, consumo, eficiencia y coste de los desplazamientos.
+En el estado actual del proyecto, el consumo de combustible **se simula mediante un potenciómetro conectado a un Arduino Nano**. El valor generado se transmite mediante CAN a un ESP32-P4, que lo combina con las coordenadas obtenidas de un GPS NEO-6M y publica la telemetría mediante MQTT.
+
+El proyecto permite validar toda la cadena de adquisición y comunicación antes de sustituir el consumo simulado por datos reales procedentes del vehículo.
 
 ## Arquitectura
 
 ```text
-                         ┌─────────────┐
-                         │     GPS     │
-                         │    NEO-6M   │
-                         └──────┬──────┘
-                                │ UART
-                                ▼
-┌─────────────┐          ┌──────────────┐
-│             │   CAN    │              │
-│   Arduino   │═════════►│   ESP32-P4   │
-│    Nano     │          │              │
-│      +      │          └──────┬───────┘
-│   MCP2515   │                 │
-│             │              Wi-Fi
-└──────▲──────┘                 │
-       │                        │ MQTT
-       │ CAN / OBD-II           ▼
-       │                 ┌──────────────┐
-┌──────┴──────┐          │  Mosquitto   │
-│   Vehículo  │          │ MQTT Broker  │
-└─────────────┘          └──────┬───────┘
-                                │
-                    ┌───────────┴───────────┐
-                    │                       │
-                    ▼                       ▼
-                Node-RED                 Python
-                    │
-                    ▼
-          Procesamiento / Dashboard
+                  POTENCIÓMETRO
+                       │
+                       │ ADC
+                       ▼
+                ┌──────────────┐
+                │ Arduino Nano │
+                └──────┬───────┘
+                       │ SPI
+                       ▼
+                  ┌─────────┐
+                  │ MCP2515 │
+                  └────┬────┘
+                       │
+                       │ CAN 500 kbit/s
+                       │
+                       ▼
+                ┌─────────────┐
+                │ SN65HVD230  │
+                └──────┬──────┘
+                       │ TWAI
+                       ▼
+GPS NEO-6M ─────────► ESP32-P4
+    UART                 │
+                         │ Wi-Fi
+                         │
+                         │ MQTT
+                         ▼
+                  ┌─────────────┐
+                  │  Mosquitto  │
+                  │ MQTT Broker │
+                  └──────┬──────┘
+                         │
+                  drivecost/telemetry
+                         │
+              ┌──────────┴──────────┐
+              ▼                     ▼
+           Node-RED               Python
 ```
 
 ## Funcionamiento
 
-DriveCost está dividido en tres bloques principales:
+DriveCost está formado actualmente por tres bloques principales.
 
-1. **Adquisición CAN**
-   
-   Un Arduino Nano conectado a un MCP2515 se encarga de trabajar con el bus CAN y obtener los datos relacionados con el vehículo.
+### Simulador de consumo
 
-2. **GPS y gateway**
-   
-   El ESP32-P4 recibe la posición desde un módulo GPS y los datos CAN mediante un transceptor SN65HVD230.
+Un Arduino Nano lee mediante su ADC un potenciómetro conectado al pin `A0`.
 
-   El ESP32 combina ambos datos y genera mensajes de telemetría.
-
-3. **Backend MQTT**
-   
-   El ESP32 se conecta mediante Wi-Fi a un broker Eclipse Mosquitto y publica periódicamente la telemetría utilizando MQTT.
-
-## Hardware
-
-El proyecto utiliza principalmente:
-
-| Componente | Función |
-|---|---|
-| Arduino Nano | Nodo CAN |
-| MCP2515 | Controlador CAN del Arduino |
-| ESP32-P4 | Gateway principal |
-| SN65HVD230 | Transceptor CAN del ESP32 |
-| GPS NEO-6M | Posicionamiento |
-| OBD-II | Acceso al vehículo |
-| PC / servidor | Broker MQTT y procesamiento |
-
-## Comunicación CAN
-
-El enlace entre el Arduino Nano y el ESP32 utiliza CAN.
-
-Configuración actual:
+El valor ADC se encuentra entre:
 
 ```text
-Bitrate: 500 kbit/s
+0 - 1023
 ```
 
-La conexión física es:
+y se transforma a un consumo simulado entre:
 
 ```text
-Arduino Nano                     ESP32-P4
-     │                               │
-     │ SPI                           │ TWAI
-     ▼                               ▼
-  MCP2515                       SN65HVD230
-     │                               │
-     │ CANH ═══════════════════ CANH │
-     │ CANL ═══════════════════ CANL │
-     │ GND  ─────────────────── GND  │
+0 - 20 L/100 km
 ```
 
-El bus debe disponer de una resistencia de terminación de **120 Ω en cada extremo**.
+mediante:
 
-Con el sistema apagado:
-
-```text
-CANH ↔ CANL ≈ 60 Ω
+```cpp
+float consumo = valorADC * 20.0 / 1023.0;
 ```
-
-indica que existen dos terminaciones de 120 Ω correctamente conectadas.
-
-## Protocolo CAN interno
-
-Actualmente DriveCost utiliza el identificador:
-
-```text
-0x100
-```
-
-para transmitir el consumo hacia el ESP32.
-
-El consumo se codifica utilizando dos bytes:
-
-```text
-Byte 0 → parte alta
-Byte 1 → parte baja
-```
-
-El valor se multiplica por `100` antes de enviarlo.
 
 Por ejemplo:
 
 ```text
-6.42 L/100km
+ADC = 0      → 0.00 L/100 km
+ADC ≈ 512    → 10.01 L/100 km
+ADC = 1023   → 20.00 L/100 km
+```
 
-6.42 × 100 = 642
+Este mecanismo permite probar el sistema modificando manualmente el consumo mediante el potenciómetro.
+
+### Comunicación CAN
+
+El Arduino Nano utiliza un controlador MCP2515 para transmitir el consumo al ESP32-P4.
+
+La red funciona a:
+
+```text
+500 kbit/s
+```
+
+La trama utilizada es:
+
+```text
+CAN ID: 0x100
+DLC:    2 bytes
+```
+
+Antes de transmitirlo, el consumo se multiplica por `100`.
+
+Por ejemplo:
+
+```text
+5.43 L/100 km
+      ↓
+543
+      ↓
+0x021F
+      ↓
+02 1F
+```
+
+El formato de la trama es:
+
+```text
+ID 0x100
+
+Byte 0                 Byte 1
+┌────────────┬───────────────┐
+│ MSB        │ LSB           │
+└────────────┴───────────────┘
+          consumo × 100
 ```
 
 El ESP32 reconstruye el valor mediante:
@@ -140,71 +137,129 @@ uint16_t valor =
 float consumo = valor / 100.0;
 ```
 
+### Gateway ESP32-P4
+
+El ESP32-P4 centraliza la información.
+
+Recibe:
+
+- Consumo simulado mediante CAN.
+- Latitud mediante GPS.
+- Longitud mediante GPS.
+
+Posteriormente genera un mensaje JSON y lo publica mediante MQTT.
+
+## Hardware
+
+| Componente | Función |
+|---|---|
+| Arduino Nano | Lectura y generación del consumo simulado |
+| Potenciómetro | Simulación del consumo instantáneo |
+| MCP2515 | Controlador CAN del Arduino Nano |
+| SN65HVD230 | Transceptor CAN del ESP32 |
+| ESP32-P4 | Gateway CAN/GPS/MQTT |
+| GPS NEO-6M | Obtención de posición |
+| PC/servidor | Broker MQTT |
+
+## Potenciómetro
+
+El potenciómetro se conecta al Arduino Nano:
+
+```text
+Potenciómetro            Arduino Nano
+
+Extremo 1 ────────────── 5V
+Central   ────────────── A0
+Extremo 2 ────────────── GND
+```
+
+El terminal central proporciona una tensión variable entre aproximadamente `0 V` y `5 V`.
+
+El ADC de 10 bits del Nano convierte esta tensión en:
+
+```text
+0 - 1023
+```
+
+## Bus CAN
+
+La conexión entre los nodos es:
+
+```text
+Arduino Nano
+     │
+     │ SPI
+     ▼
+  MCP2515
+     │
+     │ CANH/CANL
+     ▼
+SN65HVD230
+     │
+     │ TX/RX
+     ▼
+ ESP32-P4
+```
+
+Todos los nodos deben compartir GND.
+
+El bus utiliza:
+
+```text
+500 kbit/s
+```
+
+y debe disponer de una resistencia de terminación de `120 Ω` en cada extremo.
+
+Con el sistema apagado:
+
+```text
+CANH ↔ CANL ≈ 60 Ω
+```
+
+indica que las dos terminaciones de 120 Ω están conectadas.
+
 ## GPS
 
-El ESP32 recibe los datos GPS mediante UART.
+El GPS NEO-6M está conectado al ESP32 mediante UART.
 
 Configuración:
 
 ```text
-Baudrate: 9600
-Formato:  8N1
+9600 baud
+8N1
 ```
 
-Se procesan las tramas NMEA:
+El firmware procesa:
 
 ```text
 $GPGGA
 $GNGGA
 ```
 
-De ellas se obtiene:
+y extrae la latitud y longitud.
 
-```text
-Latitud
-Longitud
-Calidad del FIX
-```
-
-Las coordenadas NMEA se convierten a grados decimales antes de ser enviadas.
-
-Ejemplo:
-
-```text
-40.416775,-3.703790
-```
-
-Si el GPS no dispone de un FIX válido, las coordenadas no se consideran válidas para la telemetría.
+Las coordenadas NMEA se convierten posteriormente a grados decimales.
 
 ## MQTT
 
-El ESP32 actúa como cliente MQTT.
+El ESP32 se conecta mediante Wi-Fi a un broker Eclipse Mosquitto.
 
-El broker utilizado es:
-
-**Eclipse Mosquitto**
-
-Puerto actual:
+Configuración actual:
 
 ```text
-1883
+Protocolo: MQTT
+Puerto:    1883
+Topic:     drivecost/telemetry
 ```
 
-Topic:
+El broker requiere autenticación mediante usuario y contraseña.
 
-```text
-drivecost/telemetry
-```
-
-La conexión requiere autenticación mediante usuario y contraseña.
-
-Las conexiones anónimas están deshabilitadas en el broker.
+Las conexiones anónimas están deshabilitadas.
 
 ## Formato de telemetría
 
-DriveCost utiliza JSON para transmitir los datos.
-
-Ejemplo:
+El ESP32 publica mensajes JSON con la siguiente estructura:
 
 ```json
 {
@@ -214,60 +269,47 @@ Ejemplo:
 }
 ```
 
-Las unidades utilizadas son:
+Las unidades son:
 
-| Campo | Unidad |
-|---|---|
-| `latitud` | grados decimales |
-| `longitud` | grados decimales |
-| `consumo` | L/100 km |
+| Campo | Descripción | Unidad |
+|---|---|---|
+| `latitud` | Latitud obtenida del GPS | grados decimales |
+| `longitud` | Longitud obtenida del GPS | grados decimales |
+| `consumo` | Consumo simulado por el potenciómetro | L/100 km |
 
-El ESP32 publica periódicamente estos mensajes en:
+## Flujo de datos
 
 ```text
+Potenciómetro
+     │
+     │ 0-5 V
+     ▼
+ADC Arduino Nano
+     │
+     │ 0-1023
+     ▼
+Conversión a L/100 km
+     │
+     │ consumo × 100
+     ▼
+CAN ID 0x100
+     │
+     ▼
+ESP32-P4 ◄──────── GPS NEO-6M
+     │
+     │ JSON
+     ▼
+Wi-Fi
+     │
+     │ MQTT
+     ▼
+Mosquitto
+     │
+     ▼
 drivecost/telemetry
 ```
 
-## Flujo completo de datos
-
-El recorrido de un dato dentro de DriveCost es:
-
-```text
-Vehículo
-   │
-   │ CAN / OBD-II
-   ▼
-Arduino Nano
-   │
-   │ SPI
-   ▼
-MCP2515
-   │
-   │ CAN
-   ▼
-SN65HVD230
-   │
-   │ TWAI
-   ▼
-ESP32-P4 ◄──────── GPS
-   │
-   │
-   │ JSON
-   │
-   │ Wi-Fi / MQTT
-   ▼
-Mosquitto
-   │
-   ├────────► Node-RED
-   │
-   ├────────► Python
-   │
-   └────────► Otros clientes MQTT
-```
-
 ## Estructura del proyecto
-
-Una posible estructura del repositorio es:
 
 ```text
 DriveCost/
@@ -295,27 +337,19 @@ DriveCost/
     └── mqtt_receiver.py
 ```
 
-Cada componente dispone de su propio README con información específica sobre instalación, conexiones y configuración.
-
 ## Puesta en marcha
 
-El orden recomendado para iniciar DriveCost es:
+El orden recomendado es:
 
-### 1. Iniciar Mosquitto
+1. Iniciar Mosquitto.
+2. Iniciar un cliente MQTT para observar la telemetría.
+3. Encender el Arduino Nano.
+4. Encender el ESP32-P4.
+5. Esperar a que el GPS obtenga FIX.
+6. Girar el potenciómetro para modificar el consumo.
+7. Comprobar los mensajes MQTT.
 
-```bash
-sudo systemctl start mosquitto
-```
-
-Comprobar:
-
-```bash
-sudo systemctl status mosquitto
-```
-
-### 2. Escuchar la telemetría
-
-Para comprobar directamente los mensajes MQTT:
+Para escuchar la telemetría:
 
 ```bash
 mosquitto_sub \
@@ -327,179 +361,101 @@ mosquitto_sub \
     -v
 ```
 
-### 3. Encender el nodo CAN
-
-Alimentar el Arduino Nano y comprobar que el MCP2515 se inicializa correctamente.
-
-### 4. Encender el ESP32
-
-El ESP32 debería:
+Se deberían recibir mensajes similares a:
 
 ```text
-1. Inicializar CAN
-2. Inicializar GPS
-3. Conectarse al Wi-Fi
-4. Conectarse al broker MQTT
-5. Esperar un FIX GPS válido
-6. Recibir datos CAN
-7. Publicar la telemetría
+drivecost/telemetry {"latitud":40.416775,"longitud":-3.703790,"consumo":4.32}
+drivecost/telemetry {"latitud":40.416781,"longitud":-3.703795,"consumo":8.57}
+drivecost/telemetry {"latitud":40.416790,"longitud":-3.703801,"consumo":12.14}
 ```
 
-Una ejecución normal puede mostrar:
+Al girar el potenciómetro debe cambiar el campo `consumo`.
 
-```text
-=== DriveCost ===
-
-CAN iniciado a 500 kbps
-
-WiFi conectado
-IP ESP32: 192.168.1.50
-
-Conectando a MQTT... conectado
-
-GPS: 40.416775,-3.703790
-Consumo: 6.42 L/100km
-
-MQTT -> {"latitud":40.416775,"longitud":-3.703790,"consumo":6.42}
-```
-
-## Comprobación del broker
-
-Se puede realizar una publicación manual:
-
-```bash
-mosquitto_pub \
-    -h localhost \
-    -p 1883 \
-    -u drivecost \
-    -P 'TU_PASSWORD' \
-    -t "drivecost/telemetry" \
-    -m '{"latitud":40.416775,"longitud":-3.703790,"consumo":6.42}'
-```
-
-Esto permite probar la parte MQTT independientemente del hardware.
-
-## Diagnóstico CAN
-
-Si existen problemas de comunicación, comprobar primero el bus con un multímetro.
-
-Con el sistema apagado:
-
-```text
-CANH ↔ CANL ≈ 60 Ω
-```
-
-También comprobar:
-
-```text
-CANH ───── CANH
-CANL ───── CANL
-GND  ───── GND
-```
-
-Todos los nodos deben utilizar:
-
-```text
-500 kbit/s
-```
-
-En el MCP2515 también es necesario configurar correctamente la frecuencia de su cristal (`8 MHz` o `16 MHz`).
-
-## Diagnóstico MQTT
-
-Para observar los logs del broker:
-
-```bash
-sudo journalctl -u mosquitto -f
-```
-
-Para comprobar si Mosquitto está escuchando en el puerto esperado:
-
-```bash
-ss -ltn | grep 1883
-```
-
-Para escuchar los mensajes:
-
-```bash
-mosquitto_sub \
-    -h localhost \
-    -u drivecost \
-    -P 'TU_PASSWORD' \
-    -t "drivecost/#" \
-    -v
-```
-
-## Seguridad
-
-El broker requiere actualmente autenticación mediante usuario y contraseña:
-
-```text
-allow_anonymous false
-```
-
-Las credenciales Wi-Fi y MQTT no deben almacenarse en el repositorio público.
-
-Se recomienda utilizar archivos locales ignorados mediante `.gitignore`, variables de entorno durante el proceso de compilación o mecanismos equivalentes para gestionar secretos.
-
-La configuración actual utiliza MQTT en el puerto `1883`, por lo que existe autenticación pero **no cifrado del tráfico**.
-
-Para un despliegue fuera de una red local controlada se recomienda utilizar:
-
-```text
-MQTT sobre TLS
-Puerto 8883
-Certificados
-Usuario + contraseña
-ACL por dispositivo
-```
-
-## Estado del proyecto
+## Estado actual
 
 Actualmente DriveCost permite:
 
-- Comunicación CAN entre Arduino Nano y ESP32-P4.
-- Recepción de consumo mediante CAN.
-- Lectura de posición GPS.
+- Simular un consumo entre `0` y `20 L/100 km`.
+- Leer el potenciómetro mediante el ADC del Arduino Nano.
+- Transmitir el consumo mediante CAN.
+- Comunicación CAN a 500 kbit/s.
+- Recepción CAN mediante el ESP32-P4.
+- Obtención de latitud y longitud mediante GPS.
 - Conversión de coordenadas NMEA.
 - Conexión Wi-Fi.
-- Conexión MQTT autenticada.
-- Publicación de telemetría en JSON.
-- Recepción de datos desde clientes MQTT.
+- Autenticación MQTT.
+- Publicación de telemetría mediante JSON.
 
-## Próximos pasos
+## Limitaciones actuales
 
-La arquitectura permite ampliar DriveCost con funcionalidades como:
+El valor de consumo utilizado actualmente **no procede del vehículo**.
 
-- Integración completa con OBD-II.
-- Obtención de RPM, velocidad y carga del motor.
-- Cálculo de consumo real.
-- Almacenamiento histórico de trayectos.
-- Integración con Node-RED.
-- Dashboard en tiempo real.
-- Representación de recorridos sobre un mapa.
-- Cálculo del coste de cada trayecto.
-- Estadísticas de consumo medio.
-- Comparación entre rutas.
-- Base de datos de telemetría.
-- MQTT sobre TLS.
-- Gestión de múltiples vehículos.
-
-## Objetivo final
-
-DriveCost busca convertir los datos disponibles en el vehículo en información útil sobre cada desplazamiento:
+El potenciómetro funciona como generador de datos para validar:
 
 ```text
-CAN + GPS
-    │
-    ▼
-Telemetría
-    │
-    ▼
-Consumo + posición
-    │
-    ▼
-Ruta + eficiencia + coste
+Sensor → Arduino → CAN → ESP32 → MQTT → Backend
 ```
 
-De esta forma, el sistema puede evolucionar desde un prototipo de adquisición CAN/GPS hasta una plataforma completa de análisis de conducción y costes de desplazamiento.
+Por tanto, los valores de `L/100 km` publicados son valores simulados y no deben interpretarse como medidas reales del consumo del vehículo.
+
+## Evolución prevista
+
+Una vez validada toda la infraestructura, el generador mediante potenciómetro puede sustituirse por adquisición real de datos del vehículo.
+
+La arquitectura permite evolucionar hacia:
+
+```text
+OBD-II / ECU
+     │
+     ▼
+Datos reales del vehículo
+     │
+     ▼
+CAN
+     │
+     ▼
+ESP32 + GPS
+     │
+     ▼
+MQTT
+     │
+     ▼
+Análisis de trayectos
+```
+
+Entre las futuras funcionalidades se encuentran:
+
+- Obtención de datos reales mediante OBD-II.
+- Velocidad del vehículo.
+- RPM.
+- Carga del motor.
+- Cálculo de consumo real.
+- Almacenamiento histórico.
+- Node-RED.
+- Dashboard en tiempo real.
+- Representación GPS sobre mapa.
+- Cálculo del coste de cada trayecto.
+- Estadísticas de consumo.
+- MQTT sobre TLS.
+
+## Objetivo
+
+La versión actual de DriveCost funciona como banco de pruebas de toda la infraestructura de telemetría:
+
+```text
+Consumo simulado + GPS
+          │
+          ▼
+         CAN
+          │
+          ▼
+       ESP32-P4
+          │
+          ▼
+         MQTT
+          │
+          ▼
+      Procesamiento
+```
+
+Esto permite validar cada etapa de comunicación antes de integrar DriveCost con datos reales del vehículo.
