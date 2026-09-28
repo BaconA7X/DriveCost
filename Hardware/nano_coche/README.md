@@ -1,36 +1,92 @@
-# DriveCost — Arduino Nano + MCP2515
+# DriveCost — Arduino Nano
 
-El Arduino Nano es el nodo encargado de obtener información CAN del vehículo y transmitir los datos necesarios al ESP32-P4.
+El Arduino Nano funciona como **simulador del consumo de combustible** dentro del prototipo DriveCost.
 
-La comunicación CAN se realiza mediante un controlador **MCP2515**.
+Un potenciómetro permite generar manualmente un valor entre `0` y `20 L/100 km`. El Arduino lee este valor mediante su ADC y lo transmite al ESP32-P4 utilizando CAN mediante un módulo MCP2515.
 
 ## Arquitectura
 
 ```text
-Vehículo / OBD-II
-       │
-       │ CAN
-       ▼
-┌──────────────┐
-│ Arduino Nano │
-│      +       │
-│   MCP2515    │
-└──────┬───────┘
-       │
-       │ CAN
-       ▼
-┌──────────────┐
-│ SN65HVD230   │
-│      +       │
-│  ESP32-P4    │
-└──────────────┘
+Potenciómetro
+     │
+     │ tensión analógica
+     ▼
+Arduino Nano
+     │
+     │ SPI
+     ▼
+  MCP2515
+     │
+     │ CAN 500 kbit/s
+     ▼
+SN65HVD230
+     │
+     ▼
+ ESP32-P4
 ```
 
-## Conexión Arduino Nano ↔ MCP2515
+## Potenciómetro
+
+El potenciómetro se conecta de la siguiente forma:
+
+```text
+Potenciómetro          Arduino Nano
+
+Extremo 1 ──────────── 5V
+Pin central ────────── A0
+Extremo 2 ──────────── GND
+```
+
+El pin central proporciona una tensión variable según la posición del potenciómetro.
+
+## Lectura ADC
+
+El Arduino Nano utiliza un ADC de 10 bits.
+
+Por tanto:
+
+```text
+0 V  → ADC = 0
+5 V  → ADC = 1023
+```
+
+El firmware lee:
+
+```cpp
+int valorADC = analogRead(A0);
+```
+
+y transforma el valor a un consumo simulado:
+
+```cpp
+float consumo = valorADC * 20.0 / 1023.0;
+```
+
+El rango resultante es:
+
+```text
+0.00 - 20.00 L/100 km
+```
+
+Ejemplos aproximados:
+
+| ADC | Consumo |
+|---:|---:|
+| 0 | 0.00 L/100 km |
+| 256 | 5.00 L/100 km |
+| 512 | 10.01 L/100 km |
+| 768 | 15.01 L/100 km |
+| 1023 | 20.00 L/100 km |
+
+## MCP2515
+
+El Arduino utiliza un MCP2515 como controlador CAN externo.
+
+### Conexiones
 
 ```text
 Arduino Nano          MCP2515
-─────────────────────────────
+
 5V        ─────────── VCC
 GND       ─────────── GND
 D10       ─────────── CS
@@ -39,38 +95,17 @@ D12       ─────────── SO / MISO
 D13       ─────────── SCK
 ```
 
-El pin `INT` no es necesario para la transmisión utilizada actualmente.
+El pin `INT` no es necesario para la transmisión actual.
 
-## SPI
+## Configuración CAN
 
-En el Arduino Nano clásico:
-
-```text
-D10 → CS
-D11 → MOSI
-D12 → MISO
-D13 → SCK
-```
-
-## Frecuencia del MCP2515
-
-Es importante comprobar la frecuencia del cristal del módulo.
-
-Normalmente estará marcada físicamente como:
+El bus funciona a:
 
 ```text
-8.000
+500 kbit/s
 ```
 
-o:
-
-```text
-16.000
-```
-
-La configuración del firmware debe coincidir.
-
-Para 8 MHz:
+El firmware utiliza:
 
 ```cpp
 CAN.begin(
@@ -80,99 +115,122 @@ CAN.begin(
 );
 ```
 
-Para 16 MHz:
+La configuración `MCP_8MHZ` debe coincidir con el cristal del módulo MCP2515.
+
+Si el módulo utiliza un cristal de 16 MHz deberá utilizarse:
 
 ```cpp
-CAN.begin(
-    MCP_ANY,
-    CAN_500KBPS,
-    MCP_16MHZ
-);
+MCP_16MHZ
 ```
 
-Una frecuencia incorrecta puede hacer que el MCP2515 se inicialice pero sea incapaz de comunicarse correctamente con otros nodos CAN.
+## Codificación del consumo
 
-## Bus CAN
+CAN transporta bytes, por lo que el valor `float` no se transmite directamente.
 
-Conectar:
-
-```text
-MCP2515               ESP32/SN65HVD230
-──────────────────────────────────────
-CANH ═════════════════ CANH
-CANL ═════════════════ CANL
-GND  ───────────────── GND
-```
-
-Todos los nodos deben compartir una referencia de masa.
-
-## Velocidad
-
-DriveCost utiliza:
-
-```text
-500 kbit/s
-```
-
-Todos los nodos del bus deben utilizar la misma velocidad.
-
-## Terminación
-
-CAN requiere una resistencia de:
-
-```text
-120 Ω
-```
-
-en cada extremo físico del bus.
-
-Con las dos terminaciones instaladas:
-
-```text
-120 Ω                         120 Ω
- │                              │
-CANH ═════════════════════════ CANH
-CANL ═════════════════════════ CANL
-```
-
-Con todo apagado, medir entre CANH y CANL debería dar aproximadamente:
-
-```text
-60 Ω
-```
-
-## Trama de consumo
-
-DriveCost utiliza el identificador:
-
-```text
-0x100
-```
-
-El consumo se codifica utilizando los primeros dos bytes.
-
-Ejemplo para:
-
-```text
-6.42 L/100km
-```
-
-Primero se multiplica por 100:
-
-```text
-6.42 × 100 = 642
-```
-
-Se transmite como entero de 16 bits:
+Primero se multiplica por `100`:
 
 ```cpp
-uint16_t valor = consumo * 100;
-
-datos[0] = (valor >> 8) & 0xFF;
-datos[1] = valor & 0xFF;
+uint16_t consumoCAN =
+    (uint16_t)(consumo * 100.0);
 ```
 
-El ESP32 reconstruye posteriormente el valor.
+Ejemplo:
+
+```text
+Consumo = 5.43 L/100 km
+
+5.43 × 100 = 543
+```
+
+El entero de 16 bits se divide en dos bytes:
+
+```cpp
+data[0] = (consumoCAN >> 8) & 0xFF;
+data[1] = consumoCAN & 0xFF;
+```
+
+Para `5.43 L/100 km`:
+
+```text
+543 decimal = 0x021F
+
+data[0] = 0x02
+data[1] = 0x1F
+```
+
+## Trama CAN
+
+La trama enviada tiene:
+
+```text
+ID:  0x100
+DLC: 2
+```
+
+Formato:
+
+```text
+             CAN ID 0x100
+
+        Byte 0          Byte 1
+      ┌─────────┬─────────────────┐
+      │   MSB   │       LSB       │
+      └─────────┴─────────────────┘
+             consumo × 100
+```
+
+El ESP32 puede reconstruirlo mediante:
+
+```cpp
+uint16_t valor =
+    ((uint16_t)data[0] << 8) |
+    data[1];
+
+float consumo = valor / 100.0;
+```
+
+## Frecuencia de transmisión
+
+El firmware espera:
+
+```cpp
+delay(500);
+```
+
+por lo que aproximadamente se transmite una nueva muestra cada:
+
+```text
+500 ms
+```
+
+equivalente a aproximadamente:
+
+```text
+2 muestras/s
+```
+
+## Monitor serie
+
+El monitor serie funciona a:
+
+```text
+115200 baud
+```
+
+Ejemplo:
+
+```text
+Iniciando Arduino Nano...
+Iniciando MCP2515...
+MCP2515 iniciado correctamente
+CAN a 500 kbps
+Listo
+
+ADC: 278 | Consumo: 5.43
+ADC: 278 | Consumo: 5.43 L/100km | CAN: 2 1F
+```
+
+Al girar el potenciómetro deben cambiar tanto `ADC` como `Consumo`.
 
 ## Dependencias
 
@@ -183,13 +241,17 @@ El firmware utiliza:
 #include <mcp_can.h>
 ```
 
-Instalar:
+Es necesario instalar `MCP_CAN_lib`.
+
+## Terminación CAN
+
+El bus CAN debe tener una resistencia de `120 Ω` en cada extremo.
+
+Con ambos extremos conectados y el sistema apagado:
 
 ```text
-MCP_CAN_lib
+CANH ↔ CANL ≈ 60 Ω
 ```
-
-de Cory J. Fowler.
 
 ## Diagnóstico
 
@@ -202,16 +264,38 @@ ERROR enviando CAN
 comprobar:
 
 ```text
-MCP2515 VCC ↔ GND        → aproximadamente 5 V
-Nano GND ↔ MCP2515 GND   → continuidad
-CANH ↔ CANL              → aproximadamente 60 Ω
+MCP2515 VCC ↔ GND      ≈ 5 V
+Nano GND ↔ MCP GND     continuidad
+CANH ↔ CANL            ≈ 60 Ω con ambos nodos conectados
 ```
 
-También comprobar:
+También verificar:
 
-- Misma velocidad CAN en ambos nodos.
+- CANH conectado a CANH.
+- CANL conectado a CANL.
+- GND común.
+- Ambos nodos a 500 kbit/s.
 - Frecuencia correcta del cristal MCP2515.
-- CANH conectado con CANH.
-- CANL conectado con CANL.
-- Masa común.
-- Existencia de otro nodo activo que pueda proporcionar ACK.
+- ESP32/SN65HVD230 conectado y funcionando.
+
+## Objetivo del potenciómetro
+
+El potenciómetro **no mide el consumo real del vehículo**.
+
+Su función es permitir probar la cadena:
+
+```text
+Valor analógico
+      ↓
+Arduino
+      ↓
+CAN
+      ↓
+ESP32
+      ↓
+MQTT
+```
+
+sin depender todavía de una ECU o de un vehículo real.
+
+Esto facilita el desarrollo y depuración de DriveCost antes de integrar OBD-II.
