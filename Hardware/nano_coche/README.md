@@ -4,6 +4,10 @@ El Arduino Nano funciona como **simulador del consumo de combustible** dentro de
 
 Un potenciómetro permite generar manualmente un valor entre `0` y `20 L/100 km`. El Arduino lee este valor mediante su ADC y lo transmite al ESP32-P4 utilizando CAN mediante un módulo MCP2515.
 
+## Instalación
+
+![Instalación](Arduino%20Nano.jpeg)
+
 ## Esquema de conexiones
 
 ![Esquema de conexiones](esquematico%20nano.png)
