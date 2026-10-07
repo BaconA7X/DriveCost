@@ -690,21 +690,8 @@ QoS 2 garantiza que no haya duplicados a cambio de un intercambio de cuatro mens
 
 ---
 
-## 4. Patrones de arquitectura orientada a eventos
 
-| Patrón | Dónde se aplica |
-|---|---|
-| **Publish/subscribe** | Toda la comunicación entre el vehículo y el servidor pasa por el broker. El ESP32 no conoce a los consumidores, y añadir uno nuevo no requiere tocar el firmware. |
-| **Event-Carried State Transfer** | Cada mensaje de telemetría transporta el estado completo del vehículo, de modo que los consumidores no necesitan consultar al productor. Es lo que permite tolerar la pérdida de mensajes con QoS 0. |
-| **Last Value Cache** | Los mensajes retenidos convierten al broker en una caché del último valor de cada topic, disponible para cualquier consumidor que se conecte tarde. |
-| **Detección de presencia** | El Last Will, junto con el `online` retenido, publica la presencia del vehículo como un evento más del sistema. |
-| **Estado materializado en el consumidor** | Node-RED mantiene el último valor de cada fuente en el contexto del flujo y recalcula el resultado ante cualquier evento. |
-
-No aplicamos **Event Sourcing**, **CQRS** ni el **patrón Outbox**, porque el sistema no almacena el histórico de eventos ni tiene una base de datos. Tampoco hay **Dead Letter Queue**: los mensajes inválidos se descartan y se registran en el panel de depuración de Node-RED. Enviarlos a un topic `drivecost/dlq` sería una mejora sencilla (ver [Trabajo futuro](#6-trabajo-futuro)).
-
----
-
-## 5. Conclusiones
+## 4. Conclusiones
 
 ### Beneficios
 
@@ -729,7 +716,7 @@ No aplicamos **Event Sourcing**, **CQRS** ni el **patrón Outbox**, porque el si
 
 ---
 
-## 6. Trabajo futuro
+## 5. Trabajo futuro
 
 - **Datos reales del vehículo.** Sustituir el potenciómetro por la lectura de la ECU mediante OBD-II, y añadir velocidad, RPM y carga del motor.
 - **Varios vehículos.** Pasar a `drivecost/<id_vehiculo>/telemetry` y `drivecost/<id_vehiculo>/status`, con suscripciones `drivecost/+/…` en Node-RED.
@@ -744,7 +731,7 @@ No aplicamos **Event Sourcing**, **CQRS** ni el **patrón Outbox**, porque el si
 
 ---
 
-## 7. Estructura del repositorio y puesta en marcha
+## 6. Estructura del repositorio y puesta en marcha
 
 ### Estructura
 
