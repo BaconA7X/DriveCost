@@ -1,6 +1,6 @@
 # DriveCost — MQTT Broker
 
-DriveCost utiliza **Eclipse Mosquitto** como broker MQTT para recibir la telemetría enviada por el ESP32.
+DriveCost utiliza **Eclipse Mosquitto** como broker MQTT para recibir la telemetría y el estado de conexión enviados por el ESP32.
 
 La arquitectura es:
 
@@ -11,6 +11,9 @@ ESP32-P4
    │
    │ MQTT
    │ usuario + contraseña
+   │
+   ├── drivecost/telemetry   (posición + consumo)
+   └── drivecost/status      (online / offline, LWT)
    ▼
 ┌─────────────────┐
 │    Mosquitto    │
@@ -18,7 +21,6 @@ ESP32-P4
 └────────┬────────┘
          │
          ├── Node-RED
-         ├── Python
          └── otros consumidores
 ```
 
@@ -92,15 +94,26 @@ El servicio debe aparecer como:
 active (running)
 ```
 
-## Topic
+La configuración por defecto de Mosquitto en Ubuntu incluye `persistence true`, por lo que los mensajes retenidos se conservan aunque se reinicie el broker.
 
-La telemetría se publica en:
+## Topics
+
+| Topic | Publica | QoS | Retenido | Contenido |
+|---|---|---|---|---|
+| `drivecost/telemetry` | ESP32, cada segundo | 0 | Sí | Posición y consumo |
+| `drivecost/status` | ESP32 (`online`) y broker (`offline`) | 0 / 1 | Sí | Estado de conexión del vehículo |
+
+Ambos topics son **retenidos**: un consumidor que se conecte tarde recibe al momento la última telemetría y el último estado. Como la telemetría retenida puede ser antigua, `drivecost/status` indica si el vehículo sigue conectado.
+
+El ESP32 solo puede publicar con QoS 0, ya que la librería `PubSubClient` no permite otro nivel. El mensaje `offline` llega con QoS 1 porque lo publica el broker.
+
+## Payload de telemetría
+
+Topic:
 
 ```text
 drivecost/telemetry
 ```
-
-## Payload
 
 Formato JSON:
 
@@ -120,6 +133,67 @@ longitud → grados decimales
 consumo  → L/100km
 ```
 
+## Payload de estado
+
+Topic:
+
+```text
+drivecost/status
+```
+
+Formato JSON:
+
+```json
+{"estado":"online"}
+```
+
+```json
+{"estado":"offline"}
+```
+
+Donde:
+
+```text
+online  → lo publica el ESP32 al conectarse
+offline → lo publica el broker si el ESP32 desaparece (Last Will)
+```
+
+## Last Will and Testament
+
+El ESP32 registra un **Last Will** al conectarse al broker:
+
+```text
+Topic:    drivecost/status
+Mensaje:  {"estado":"offline"}
+QoS:      1
+Retenido: sí
+```
+
+Funcionamiento:
+
+```text
+Al conectar   → el ESP32 registra el Last Will
+                y publica {"estado":"online"} (retenido)
+
+Si se cae     → el broker publica {"estado":"offline"}
+                tras 1,5 × keep alive
+
+Al reconectar → {"estado":"online"} sobrescribe
+                el offline retenido
+```
+
+El ESP32 usa un keep alive de `10 s`, por lo que la desconexión se detecta en unos `15 s`.
+
+El Last Will **solo se publica si la conexión se corta sin DISCONNECT**, por ejemplo al desenchufar el ESP32 o al perder la Wi-Fi.
+
+El Client ID es fijo y se obtiene de la MAC del ESP32:
+
+```text
+DriveCost-<MAC>
+```
+
+Con un Client ID aleatorio, tras un reinicio la conexión antigua seguiría abierta y su `offline` llegaría después del `online` nuevo.
+
 ## Probar autenticación
 
 Una conexión sin credenciales debería ser rechazada:
@@ -128,7 +202,7 @@ Una conexión sin credenciales debería ser rechazada:
 mosquitto_sub \
     -h localhost \
     -p 1883 \
-    -t "drivecost/telemetry"
+    -t "drivecost/#"
 ```
 
 Con autenticación:
@@ -138,30 +212,78 @@ mosquitto_sub \
     -h localhost \
     -p 1883 \
     -u drivecost \
-    -P 'SistemasDistribuidos2026' \
-    -t "drivecost/telemetry" \
+    -P 'TU_PASSWORD' \
+    -t "drivecost/#" \
     -v
 ```
 
-Cuando el ESP32 publique datos deberían aparecer mensajes similares a:
+Cuando el ESP32 se conecte deberían aparecer mensajes similares a:
 
 ```text
+drivecost/status {"estado":"online"}
 drivecost/telemetry {"latitud":40.416775,"longitud":-3.703790,"consumo":6.42}
 drivecost/telemetry {"latitud":40.416781,"longitud":-3.703795,"consumo":6.38}
 ```
 
+## Probar el Last Will
+
+Con el `mosquitto_sub` anterior abierto, desconectar la alimentación del ESP32.
+
+Tras unos `15 s` debe aparecer:
+
+```text
+drivecost/status {"estado":"offline"}
+```
+
+Al volver a conectarlo:
+
+```text
+drivecost/status {"estado":"online"}
+```
+
 ## Publicación manual
 
-También puede comprobarse el broker publicando manualmente:
+También puede comprobarse el broker publicando manualmente.
+
+Telemetría:
 
 ```bash
 mosquitto_pub \
     -h localhost \
     -p 1883 \
     -u drivecost \
-    -P 'SistemasDistribuidos2026' \
+    -P 'TU_PASSWORD' \
     -t "drivecost/telemetry" \
     -m '{"latitud":40.416775,"longitud":-3.703790,"consumo":6.42}'
+```
+
+Estado:
+
+```bash
+mosquitto_pub \
+    -h localhost \
+    -p 1883 \
+    -u drivecost \
+    -P 'TU_PASSWORD' \
+    -t "drivecost/status" \
+    -r \
+    -q 1 \
+    -m '{"estado":"offline"}'
+```
+
+## Borrar un mensaje retenido
+
+Para eliminar el mensaje retenido de un topic se publica un mensaje vacío con `-r`:
+
+```bash
+mosquitto_pub \
+    -h localhost \
+    -p 1883 \
+    -u drivecost \
+    -P 'TU_PASSWORD' \
+    -t "drivecost/status" \
+    -r \
+    -n
 ```
 
 ## Obtener IP del broker
