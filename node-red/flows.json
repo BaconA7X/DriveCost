@@ -1,0 +1,510 @@
+[
+    {
+        "id": "f100000000000001",
+        "type": "tab",
+        "label": "Gasolineras TOP 3 + precios",
+        "disabled": false,
+        "info": "Recibe GPS por MQTT, descarga precios oficiales de carburantes de España, muestra las 3 estaciones más cercanas que venden el combustible seleccionado y las pinta en Dashboard 2.0 + Worldmap."
+    },
+    {
+        "id": "f10000000000000f",
+        "type": "comment",
+        "z": "f100000000000001",
+        "name": "MQTT esperado: {\"latitud\":40.389700,\"longitud\":-3.627894,\"consumo\":8.71} | INSTALA: @flowfuse/node-red-dashboard + node-red-contrib-web-worldmap | Dashboard: /dashboard/gasolineras | Mapa: /gasolineras-map",
+        "info": "1) Configura el broker MQTT. 2) Ajusta el topic gps/location si hace falta. 3) Deploy. 4) Abre /dashboard/gasolineras. La API oficial se refresca cada 15 minutos.\n\nIMPORTANTE: las credenciales MQTT no se exportan con el flow. Abre CONFIGURA TU BROKER MQTT y rellena host, puerto, usuario y contraseña. El nodo DEBUG MQTT RAW muestra el mensaje recibido antes del parseo.",
+        "x": 610,
+        "y": 40,
+        "wires": []
+    },
+    {
+        "id": "f100000000000002",
+        "type": "mqtt in",
+        "z": "f100000000000001",
+        "name": "Ubicación MQTT",
+        "topic": "drivecost/telemetry",
+        "qos": "0",
+        "datatype": "auto-detect",
+        "broker": "f100000000000010",
+        "nl": false,
+        "rap": true,
+        "rh": 0,
+        "inputs": 0,
+        "x": 140,
+        "y": 120,
+        "wires": [
+            [
+                "f100000000000003",
+                "f10000000000d001"
+            ]
+        ]
+    },
+    {
+        "id": "f100000000000004",
+        "type": "inject",
+        "z": "f100000000000001",
+        "name": "TEST MQTT DriveCost",
+        "props": [
+            {
+                "p": "payload"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "",
+        "payload": "{\"latitud\":40.389700,\"longitud\":-3.627894,\"consumo\":8.71}",
+        "payloadType": "json",
+        "x": 140,
+        "y": 180,
+        "wires": [
+            [
+                "f100000000000003"
+            ]
+        ]
+    },
+    {
+        "id": "f100000000000003",
+        "type": "function",
+        "z": "f100000000000001",
+        "name": "Guardar GPS + consumo",
+        "func": "let p = msg.payload;\n\n// MQTT puede entregar Buffer, texto u objeto según la configuración.\nif (Buffer.isBuffer(p)) {\n    p = p.toString('utf8');\n}\n\nif (typeof p === 'string') {\n    try { p = JSON.parse(p); }\n    catch (e) {\n        node.error('El payload MQTT no es JSON válido', msg);\n        return null;\n    }\n}\n\nif (!p || typeof p !== 'object') {\n    node.error('Payload MQTT no válido', msg);\n    return null;\n}\n\n// Formato principal esperado:\n// {\"latitud\":40.389700,\"longitud\":-3.627894,\"consumo\":8.71}\nconst lat = Number(\n    p.latitud ?? p.lat ?? p.latitude ??\n    p.location?.latitud ?? p.location?.lat ?? p.location?.latitude ??\n    p.ubicacion?.latitud ?? p.ubicacion?.lat ?? p.ubicacion?.latitude\n);\nconst lon = Number(\n    p.longitud ?? p.lon ?? p.lng ?? p.longitude ??\n    p.location?.longitud ?? p.location?.lon ?? p.location?.lng ?? p.location?.longitude ??\n    p.ubicacion?.longitud ?? p.ubicacion?.lon ?? p.ubicacion?.lng ?? p.ubicacion?.longitude\n);\nconst consumo = Number(p.consumo);\n\nif (!Number.isFinite(lat) || !Number.isFinite(lon) || lat < -90 || lat > 90 || lon < -180 || lon > 180) {\n    node.error('Coordenadas no válidas. Se esperan latitud y longitud numéricas.', msg);\n    return null;\n}\n\nif (!Number.isFinite(consumo) || consumo < 0) {\n    node.error('Consumo no válido. Se espera consumo en L/100 km.', msg);\n    return null;\n}\n\nflow.set('gps', { lat, lon, consumo, ts: Date.now() });\nflow.set('consumoL100', consumo);\n\nmsg.topic = 'recalcular';\nmsg.payload = { lat, lon, consumo };\nnode.status({\n    fill:'green',\n    shape:'dot',\n    text:`${lat.toFixed(5)}, ${lon.toFixed(5)} · ${consumo.toFixed(2)} L/100 km`\n});\nreturn msg;",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 370,
+        "y": 140,
+        "wires": [
+            [
+                "f10000000000000a"
+            ]
+        ]
+    },
+    {
+        "id": "f100000000000005",
+        "type": "inject",
+        "z": "f100000000000001",
+        "name": "Precios: inicio + cada 15 min",
+        "props": [
+            {
+                "p": "payload"
+            },
+            {
+                "p": "topic",
+                "vt": "str"
+            }
+        ],
+        "repeat": "900",
+        "crontab": "",
+        "once": true,
+        "onceDelay": "1",
+        "topic": "precios",
+        "payload": "",
+        "payloadType": "date",
+        "x": 180,
+        "y": 280,
+        "wires": [
+            [
+                "f100000000000006"
+            ]
+        ]
+    },
+    {
+        "id": "f100000000000006",
+        "type": "function",
+        "z": "f100000000000001",
+        "name": "Preparar API oficial",
+        "func": "msg.method = 'GET';\nmsg.url = 'https://energia.serviciosmin.gob.es/ServiciosRestCarburantes/PreciosCarburantes/EstacionesTerrestres/';\nmsg.headers = {\n    Accept: 'application/json',\n    'User-Agent': 'Node-RED gasolineras-dashboard'\n};\nmsg.payload = '';\nreturn msg;",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 440,
+        "y": 280,
+        "wires": [
+            [
+                "f100000000000007"
+            ]
+        ]
+    },
+    {
+        "id": "f100000000000007",
+        "type": "http request",
+        "z": "f100000000000001",
+        "name": "API precios carburantes",
+        "method": "use",
+        "ret": "obj",
+        "paytoqs": "ignore",
+        "url": "",
+        "tls": "",
+        "persist": false,
+        "proxy": "",
+        "insecureHTTPParser": false,
+        "authType": "",
+        "senderr": false,
+        "headers": [],
+        "x": 700,
+        "y": 280,
+        "wires": [
+            [
+                "f100000000000008"
+            ]
+        ]
+    },
+    {
+        "id": "f100000000000008",
+        "type": "function",
+        "z": "f100000000000001",
+        "name": "Guardar precios en caché",
+        "func": "let p = msg.payload;\nif (typeof p === 'string') {\n    try { p = JSON.parse(p); } catch (e) {}\n}\n\nif (!p || !Array.isArray(p.ListaEESSPrecio)) {\n    node.error('La API oficial no devolvió ListaEESSPrecio', msg);\n    node.status({fill:'red', shape:'ring', text:'Error descargando precios'});\n    return null;\n}\n\nflow.set('estaciones', p.ListaEESSPrecio);\nflow.set('fechaPrecios', p.Fecha || '');\nflow.set('preciosActualizadosLocal', new Date().toISOString());\n\nnode.status({fill:'green', shape:'dot', text:`${p.ListaEESSPrecio.length} estaciones`});\nmsg.topic = 'recalcular';\nmsg.payload = { estaciones: p.ListaEESSPrecio.length, fecha: p.Fecha || '' };\nreturn msg;",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 970,
+        "y": 280,
+        "wires": [
+            [
+                "f10000000000000a"
+            ]
+        ]
+    },
+    {
+        "id": "f100000000000009",
+        "type": "function",
+        "z": "f100000000000001",
+        "name": "Guardar combustible",
+        "func": "const key = String(msg.payload || '').trim();\nconst valid = new Set([\n'g95e5','g95e10','g95e25','g95e85','g95e5premium','g98e5','g98e10',\n'dieselA','dieselPremium','dieselB','glp','gnc','gnl','biogasC','biogasL',\n'biodiesel','bioetanol','dieselRenovable','gasolinaRenovable','adblue','hidrogeno','amoniaco','metanol'\n]);\nif (!valid.has(key)) {\n    node.warn('Combustible desconocido: ' + key);\n    return null;\n}\nflow.set('combustible', key);\nmsg.topic = 'recalcular';\nreturn msg;",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 670,
+        "y": 500,
+        "wires": [
+            [
+                "f10000000000000a"
+            ]
+        ]
+    },
+    {
+        "id": "f10000000000000a",
+        "type": "function",
+        "z": "f100000000000001",
+        "name": "Calcular TOP 3",
+        "func": "const gps = flow.get('gps');\nconst estaciones = flow.get('estaciones') || [];\nconst selected = flow.get('combustible') || 'g95e5';\n\nconst fuels = {\n    g95e5: {label:'Gasolina 95 (E5)', unit:'€/L', fields:['Precio Gasolina 95 E5','Precio_x0020_Gasolina_x0020_95_x0020_E5']},\n    g95e10: {label:'Gasolina 95 E10', unit:'€/L', fields:['Precio Gasolina 95 E10','Precio_x0020_Gasolina_x0020_95_x0020_E10']},\n    g95e25: {label:'Gasolina 95 E25', unit:'€/L', fields:['Precio Gasolina 95 E25','Precio_x0020_Gasolina_x0020_95_x0020_E25']},\n    g95e85: {label:'Gasolina 95 E85', unit:'€/L', fields:['Precio Gasolina 95 E85','Precio_x0020_Gasolina_x0020_95_x0020_E85']},\n    g95e5premium: {label:'Gasolina 95 E5 Premium', unit:'€/L', fields:['Precio Gasolina 95 E5 Premium','Precio_x0020_Gasolina_x0020_95_x0020_E5_x0020_Premium']},\n    g98e5: {label:'Gasolina 98 (E5)', unit:'€/L', fields:['Precio Gasolina 98 E5','Precio_x0020_Gasolina_x0020_98_x0020_E5']},\n    g98e10: {label:'Gasolina 98 E10', unit:'€/L', fields:['Precio Gasolina 98 E10','Precio_x0020_Gasolina_x0020_98_x0020_E10']},\n    dieselA: {label:'Diésel / Gasóleo A', unit:'€/L', fields:['Precio Gasoleo A','Precio_x0020_Gasoleo_x0020_A']},\n    dieselPremium: {label:'Diésel Premium', unit:'€/L', fields:['Precio Gasoleo Premium','Precio_x0020_Gasoleo_x0020_Premium']},\n    dieselB: {label:'Gasóleo B', unit:'€/L', fields:['Precio Gasoleo B','Precio_x0020_Gasoleo_x0020_B']},\n    glp: {label:'GLP', unit:'€/L', fields:['Precio Gases licuados del petróleo','Precio_x0020_Gases_x0020_licuados_x0020_del_x0020_petróleo']},\n    gnc: {label:'GNC', unit:'€/kg', fields:['Precio Gas Natural Comprimido','Precio_x0020_Gas_x0020_Natural_x0020_Comprimido']},\n    gnl: {label:'GNL', unit:'€/kg', fields:['Precio Gas Natural Licuado','Precio_x0020_Gas_x0020_Natural_x0020_Licuado']},\n    biogasC: {label:'Biogás Natural Comprimido', unit:'€/kg', fields:['Precio Biogas Natural Comprimido','Precio_x0020_Biogas_x0020_Natural_x0020_Comprimido']},\n    biogasL: {label:'Biogás Natural Licuado', unit:'€/kg', fields:['Precio Biogas Natural Licuado','Precio_x0020_Biogas_x0020_Natural_x0020_Licuado']},\n    biodiesel: {label:'Biodiésel', unit:'€/L', fields:['Precio Biodiesel','Precio_x0020_Biodiesel']},\n    bioetanol: {label:'Bioetanol', unit:'€/L', fields:['Precio Bioetanol','Precio_x0020_Bioetanol']},\n    dieselRenovable: {label:'Diésel Renovable', unit:'€/L', fields:['Precio Diésel Renovable','Precio_x0020_Diésel_x0020_Renovable']},\n    gasolinaRenovable: {label:'Gasolina Renovable', unit:'€/L', fields:['Precio Gasolina Renovable','Precio_x0020_Gasolina_x0020_Renovable']},\n    adblue: {label:'AdBlue', unit:'€/L', fields:['Precio Adblue','Precio_x0020_Adblue']},\n    hidrogeno: {label:'Hidrógeno', unit:'€/kg', fields:['Precio Hidrogeno','Precio_x0020_Hidrogeno']},\n    amoniaco: {label:'Amoníaco', unit:'€/kg', fields:['Precio Amoniaco','Precio_x0020_Amoniaco']},\n    metanol: {label:'Metanol', unit:'€/L', fields:['Precio Metanol','Precio_x0020_Metanol']}\n};\n\nconst fuel = fuels[selected] || fuels.g95e5;\nconst consumo = gps && Number.isFinite(gps.consumo) ? gps.consumo : Number(flow.get('consumoL100'));\nconst canCalculateEuro100 = fuel.unit === '€/L' && Number.isFinite(consumo);\n\nconst basePayload = {\n    selectedFuel: selected,\n    fuelLabel: fuel.label,\n    unit: fuel.unit,\n    consumoL100: Number.isFinite(consumo) ? consumo : null,\n    canCalculateEuro100,\n    top3: [],\n    gps: gps || null,\n    fechaPrecios: flow.get('fechaPrecios') || '',\n    preciosActualizadosLocal: flow.get('preciosActualizadosLocal') || '',\n    state: 'ok',\n    message: '',\n    consumoMessage: ''\n};\n\nif (!gps || !Number.isFinite(gps.lat) || !Number.isFinite(gps.lon)) {\n    basePayload.state = 'waiting-gps';\n    basePayload.message = 'Esperando MQTT: {latitud, longitud, consumo}.';\n    msg.payload = basePayload;\n    return msg;\n}\n\nif (!Number.isFinite(consumo)) {\n    basePayload.state = 'waiting-consumption';\n    basePayload.message = 'La ubicación ha llegado, pero falta consumo en L/100 km.';\n    msg.payload = basePayload;\n    return msg;\n}\n\nif (!estaciones.length) {\n    basePayload.state = 'waiting-prices';\n    basePayload.message = 'Descargando precios oficiales…';\n    msg.payload = basePayload;\n    return msg;\n}\n\nif (fuel.unit !== '€/L') {\n    basePayload.consumoMessage = `El consumo MQTT es ${consumo.toFixed(2)} L/100 km, pero ${fuel.label} se publica en ${fuel.unit}. No se puede obtener €/100 km sin un consumo compatible.`;\n}\n\nfunction first(obj, names) {\n    for (const n of names) {\n        if (obj[n] !== undefined && obj[n] !== null && String(obj[n]).trim() !== '') return obj[n];\n    }\n    return '';\n}\n\nfunction num(v) {\n    if (v === undefined || v === null || v === '') return NaN;\n    return Number(String(v).trim().replace(',', '.'));\n}\n\nfunction distanceKm(lat1, lon1, lat2, lon2) {\n    const R = 6371;\n    const dLat = (lat2-lat1) * Math.PI / 180;\n    const dLon = (lon2-lon1) * Math.PI / 180;\n    const a =\n        Math.sin(dLat/2)**2 +\n        Math.cos(lat1*Math.PI/180) *\n        Math.cos(lat2*Math.PI/180) *\n        Math.sin(dLon/2)**2;\n    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));\n}\n\nconst rows = [];\n\nfor (const e of estaciones) {\n    const lat = num(first(e, ['Latitud']));\n    const lon = num(first(e, ['Longitud (WGS84)','Longitud_x0020__x0028_WGS84_x0029_']));\n\n    if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;\n    if (lat < -90 || lat > 90 || lon < -180 || lon > 180) continue;\n\n    const distanciaKm = distanceKm(gps.lat, gps.lon, lat, lon);\n\n    const rawPrice = first(e, fuel.fields);\n    const parsedPrice = num(rawPrice);\n    const disponible = Number.isFinite(parsedPrice) && parsedPrice > 0;\n    const price = disponible ? parsedPrice : null;\n\n    const costeEuro100 =\n        disponible && canCalculateEuro100\n            ? consumo * price\n            : null;\n\n    rows.push({\n        id: String(first(e, ['IDEESS']) || `${lat},${lon}`),\n        nombre: String(first(e, ['Rótulo','Rotulo']) || 'Gasolinera'),\n        direccion: String(first(e, ['Dirección','Direccion']) || ''),\n        localidad: String(first(e, ['Localidad']) || ''),\n        municipio: String(first(e, ['Municipio']) || ''),\n        provincia: String(first(e, ['Provincia']) || ''),\n        horario: String(first(e, ['Horario']) || ''),\n        lat,\n        lon,\n        price,\n        disponible,\n        consumoL100: consumo,\n        costeEuro100,\n        distanciaKm\n    });\n}\n\n// IMPORTANTE:\n// El TOP 3 se calcula SOLO por distancia geográfica.\n// Después se comprueba si cada una vende el combustible seleccionado.\nrows.sort((a,b) => a.distanciaKm - b.distanciaKm);\nbasePayload.top3 = rows.slice(0,3);\n\nbasePayload.availableCount = rows.filter(r => r.disponible).length;\nbasePayload.nearestDistanceKm = basePayload.top3.length ? basePayload.top3[0].distanciaKm : null;\n\nif (!basePayload.top3.length) {\n    basePayload.state = 'no-results';\n    basePayload.message = 'No se han encontrado estaciones con coordenadas válidas.';\n} else if (!basePayload.top3.some(r => r.disponible)) {\n    basePayload.message = `Las 3 estaciones más cercanas no publican precio para ${fuel.label}.`;\n}\n\n// Diagnóstico útil en DEBUG TOP 3 / estado\nbasePayload.debugGps = {\n    latitudUsada: gps.lat,\n    longitudUsada: gps.lon,\n    consumoUsado: consumo\n};\n\nnode.status({\n    fill: basePayload.top3.length ? 'green' : 'yellow',\n    shape:'dot',\n    text:`GPS ${gps.lat.toFixed(4)}, ${gps.lon.toFixed(4)} · nearest ${basePayload.nearestDistanceKm !== null ? basePayload.nearestDistanceKm.toFixed(2)+' km' : '—'}`\n});\n\nmsg.payload = basePayload;\nreturn msg;",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 940,
+        "y": 420,
+        "wires": [
+            [
+                "f10000000000000b",
+                "f10000000000000d",
+                "f10000000000000e"
+            ]
+        ]
+    },
+    {
+        "id": "f10000000000000b",
+        "type": "function",
+        "z": "f100000000000001",
+        "name": "Preparar Worldmap",
+        "func": "const p = msg.payload || {};\nconst out = [];\n\n// ======================================================\n// ICONOS\n// ======================================================\n\n// Worldmap permite usar emojis con la sintaxis :emoji:\nconst iconosTop = [\n    \":1️⃣:\",\n    \":2️⃣:\",\n    \":3️⃣:\"\n];\n\n// ======================================================\n// 1. LIMPIAR CAPAS\n// ======================================================\n\nout.push({\n    payload: {\n        command: {\n            clearlayer: [\n                \"Gasolineras TOP 3\",\n                \"Mi ubicación\"\n            ]\n        }\n    }\n});\n\n// ======================================================\n// 2. MI UBICACIÓN\n// ======================================================\n\nif (\n    p.gps &&\n    Number.isFinite(Number(p.gps.lat)) &&\n    Number.isFinite(Number(p.gps.lon))\n) {\n\n    const lat = Number(p.gps.lat);\n    const lon = Number(p.gps.lon);\n\n    let popup =\n        \"<b>🚗 Mi ubicación</b><br>\" +\n        \"Latitud: \" + lat.toFixed(6) + \"<br>\" +\n        \"Longitud: \" + lon.toFixed(6);\n\n    if (Number.isFinite(Number(p.consumoL100))) {\n        popup +=\n            \"<br><br>⛽ Consumo: <b>\" +\n            Number(p.consumoL100).toFixed(2) +\n            \" L/100 km</b>\";\n    }\n\n    out.push({\n        payload: {\n            name: \"Mi ubicación\",\n\n            lat: lat,\n            lon: lon,\n\n            layer: \"Mi ubicación\",\n\n            // ICONO DE TU POSICIÓN\n            icon: \":🚗:\",\n\n            tooltip: \"Mi ubicación\",\n\n            popup: popup,\n\n            ttl: 0\n        }\n    });\n}\n\n// ======================================================\n// 3. TOP 3 GASOLINERAS\n// ======================================================\n\nconst top3 = Array.isArray(p.top3)\n    ? p.top3\n    : [];\n\nfor (let i = 0; i < top3.length; i++) {\n\n    const g = top3[i];\n\n    const lat = Number(g.lat);\n    const lon = Number(g.lon);\n\n    if (\n        !Number.isFinite(lat) ||\n        !Number.isFinite(lon)\n    ) {\n        node.warn(\n            \"Gasolinera sin coordenadas: \" +\n            JSON.stringify(g)\n        );\n        continue;\n    }\n\n    // ==================================================\n    // DISTANCIA\n    // ==================================================\n\n    const dist =\n        Number.isFinite(Number(g.distanciaKm))\n            ? Number(g.distanciaKm).toLocaleString(\n                \"es-ES\",\n                {\n                    minimumFractionDigits: 2,\n                    maximumFractionDigits: 2\n                }\n            )\n            : \"—\";\n\n    // ==================================================\n    // PRECIO\n    // ==================================================\n\n    const tienePrecio =\n        g.disponible === true &&\n        g.price !== null &&\n        Number.isFinite(Number(g.price));\n\n    const precio =\n        tienePrecio\n            ? Number(g.price).toLocaleString(\n                \"es-ES\",\n                {\n                    minimumFractionDigits: 3,\n                    maximumFractionDigits: 3\n                }\n            )\n            : null;\n\n    // ==================================================\n    // COSTE €/100KM\n    // ==================================================\n\n    const coste =\n        g.costeEuro100 !== null &&\n            Number.isFinite(Number(g.costeEuro100))\n            ? Number(g.costeEuro100).toLocaleString(\n                \"es-ES\",\n                {\n                    minimumFractionDigits: 2,\n                    maximumFractionDigits: 2\n                }\n            )\n            : null;\n\n    // ==================================================\n    // POPUP\n    // ==================================================\n\n    let popup =\n        \"<div style='min-width:230px'>\" +\n\n        \"<h3 style='margin:0 0 10px 0'>\" +\n        \"#\" + (i + 1) + \" \" +\n        (g.nombre || \"Gasolinera\") +\n        \"</h3>\" +\n\n        \"📍 Distancia: <b>\" +\n        dist +\n        \" km</b><br><br>\" +\n\n        \"⛽ \" +\n        (p.fuelLabel || \"Combustible\") +\n        \":<br>\";\n\n    if (tienePrecio) {\n\n        popup +=\n            \"<span style='\" +\n            \"font-size:22px;\" +\n            \"font-weight:bold;\" +\n            \"'>\" +\n\n            precio +\n            \" \" +\n            (p.unit || \"\") +\n\n            \"</span>\";\n\n    } else {\n\n        popup +=\n            \"<b>Precio no disponible</b>\";\n    }\n\n    // ==================================================\n    // COSTE\n    // ==================================================\n\n    if (coste !== null) {\n\n        popup +=\n            \"<br><br>\" +\n\n            \"🚗 Coste:<br>\" +\n\n            \"<span style='\" +\n            \"font-size:20px;\" +\n            \"font-weight:bold;\" +\n            \"'>\" +\n\n            coste +\n            \" €/100 km\" +\n\n            \"</span>\";\n\n        if (\n            Number.isFinite(Number(g.consumoL100)) &&\n            tienePrecio\n        ) {\n\n            popup +=\n                \"<br><small>\" +\n\n                Number(g.consumoL100).toFixed(2) +\n                \" L/100 km × \" +\n\n                Number(g.price).toFixed(3) +\n                \" €/L\" +\n\n                \"</small>\";\n        }\n    }\n\n    // ==================================================\n    // DIRECCIÓN\n    // ==================================================\n\n    if (g.direccion) {\n        popup +=\n            \"<br><br>📌 \" +\n            g.direccion;\n    }\n\n    if (g.localidad) {\n        popup +=\n            \"<br>\" +\n            g.localidad;\n    }\n\n    if (g.horario) {\n        popup +=\n            \"<br><br>🕒 \" +\n            g.horario;\n    }\n\n    popup += \"</div>\";\n\n    // ==================================================\n    // MARCADOR\n    // ==================================================\n\n    out.push({\n        payload: {\n\n            name:\n                \"TOP\" +\n                (i + 1) +\n                \"-\" +\n                String(g.id || i),\n\n            lat: lat,\n            lon: lon,\n\n            layer: \"Gasolineras TOP 3\",\n\n            // AQUÍ ESTÁ EL CAMBIO IMPORTANTE\n            icon: iconosTop[i],\n\n            tooltip:\n                \"#\" +\n                (i + 1) +\n                \" \" +\n                (g.nombre || \"Gasolinera\") +\n                \" · \" +\n                dist +\n                \" km\",\n\n            popup: popup,\n\n            ttl: 0\n        }\n    });\n}\n\n// ======================================================\n// 4. CENTRAR MAPA\n// ======================================================\n\nif (\n    p.gps &&\n    Number.isFinite(Number(p.gps.lat)) &&\n    Number.isFinite(Number(p.gps.lon))\n) {\n\n    out.push({\n        payload: {\n            command: {\n\n                lat: Number(p.gps.lat),\n                lon: Number(p.gps.lon),\n\n                zoom: 14,\n\n                showlayer: [\n                    \"Mi ubicación\",\n                    \"Gasolineras TOP 3\"\n                ]\n            }\n        }\n    });\n}\n\nreturn [out];",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 1200,
+        "y": 360,
+        "wires": [
+            [
+                "f10000000000000c",
+                "f10000000000d0aa"
+            ]
+        ]
+    },
+    {
+        "id": "f10000000000000c",
+        "type": "worldmap",
+        "z": "f100000000000001",
+        "name": "Mapa TOP 3",
+        "lat": "40.389700",
+        "lon": "-3.627894",
+        "zoom": "15",
+        "layer": "OSMG",
+        "cluster": "",
+        "maxage": "",
+        "usermenu": "show",
+        "layers": "show",
+        "panit": "false",
+        "panlock": "false",
+        "zoomlock": "false",
+        "hiderightclick": "false",
+        "coords": "deg",
+        "showgrid": "false",
+        "showruler": "false",
+        "allowFileDrop": "false",
+        "path": "/gasolineras-map",
+        "overlist": "CO,RA,DN",
+        "maplist": "OSMG,OSMH,EsriS",
+        "mapname": "",
+        "mapurl": "",
+        "mapopt": "",
+        "mapwms": false,
+        "x": 1450,
+        "y": 360,
+        "wires": []
+    },
+    {
+        "id": "f10000000000000d",
+        "type": "ui-template",
+        "z": "f100000000000001",
+        "group": "f100000000000013",
+        "page": "",
+        "ui": "",
+        "name": "Dashboard gasolineras",
+        "order": 1,
+        "width": 12,
+        "height": 0,
+        "head": "",
+        "format": "<template>\n  <div class=\"fuel-app\">\n    <div class=\"topbar\">\n      <div>\n        <div class=\"eyebrow\">DRIVECOST · GASOLINERAS CERCANAS</div>\n        <h2>TOP 3 por distancia</h2>\n        <div class=\"live-consumption\" v-if=\"Number.isFinite(Number(msg?.payload?.consumoL100))\">\n          Consumo actual: <b>{{ consumption(msg.payload.consumoL100) }} L/100 km</b>\n        </div>\n      </div>\n      <div class=\"selector-wrap\">\n        <label for=\"fuel-select\">Combustible</label>\n        <select id=\"fuel-select\" :value=\"msg?.payload?.selectedFuel || 'g95e5'\" @change=\"changeFuel\">\n          <optgroup label=\"Gasolina\">\n            <option value=\"g95e5\">Gasolina 95 (E5)</option>\n            <option value=\"g95e10\">Gasolina 95 E10</option>\n            <option value=\"g95e25\">Gasolina 95 E25</option>\n            <option value=\"g95e85\">Gasolina 95 E85</option>\n            <option value=\"g95e5premium\">Gasolina 95 E5 Premium</option>\n            <option value=\"g98e5\">Gasolina 98 (E5)</option>\n            <option value=\"g98e10\">Gasolina 98 E10</option>\n            <option value=\"gasolinaRenovable\">Gasolina renovable</option>\n          </optgroup>\n          <optgroup label=\"Diésel\">\n            <option value=\"dieselA\">Diésel / Gasóleo A</option>\n            <option value=\"dieselPremium\">Diésel Premium</option>\n            <option value=\"dieselB\">Gasóleo B</option>\n            <option value=\"dieselRenovable\">Diésel renovable</option>\n            <option value=\"biodiesel\">Biodiésel</option>\n          </optgroup>\n          <optgroup label=\"Gas y alternativos\">\n            <option value=\"glp\">GLP</option>\n            <option value=\"gnc\">GNC</option>\n            <option value=\"gnl\">GNL</option>\n            <option value=\"biogasC\">Biogás natural comprimido</option>\n            <option value=\"biogasL\">Biogás natural licuado</option>\n            <option value=\"bioetanol\">Bioetanol</option>\n            <option value=\"hidrogeno\">Hidrógeno</option>\n            <option value=\"amoniaco\">Amoníaco</option>\n            <option value=\"metanol\">Metanol</option>\n            <option value=\"adblue\">AdBlue</option>\n          </optgroup>\n        </select>\n      </div>\n    </div>\n\n    <div class=\"status\" v-if=\"msg?.payload?.message\">{{ msg.payload.message }}</div>\n    <div class=\"warning\" v-if=\"msg?.payload?.consumoMessage\">{{ msg.payload.consumoMessage }}</div>\n\n    <div class=\"cards\" v-if=\"msg?.payload?.top3?.length\">\n      <article class=\"station\" v-for=\"(g, i) in msg.payload.top3\" :key=\"g.id\">\n        <div class=\"rank\">#{{ i + 1 }}</div>\n        <div class=\"brand\">{{ g.nombre }}</div>\n\n        <div class=\"price\" v-if=\"g.disponible\">{{ price(g.price) }} <small>{{ msg.payload.unit }}</small></div>\n        <div class=\"price unavailable-price\" v-else>— <small>No disponible</small></div>\n        <div class=\"fuel\">{{ msg.payload.fuelLabel }}</div>\n\n        <div class=\"cost-box\" v-if=\"g.disponible && g.costeEuro100 !== null && Number.isFinite(Number(g.costeEuro100))\">\n          <div class=\"cost-label\">Coste con tu consumo</div>\n          <div class=\"cost\">{{ euro100(g.costeEuro100) }} <small>€/100 km</small></div>\n          <div class=\"formula\">{{ consumption(g.consumoL100) }} L/100 km × {{ price(g.price) }} €/L</div>\n        </div>\n        <div class=\"cost-box unavailable\" v-else>\n          <div class=\"cost-label\">Coste con tu consumo</div>\n          <div class=\"cost-na\">No calculable</div>\n          <div class=\"formula\">Tu consumo llega en L/100 km y este combustible se publica en {{ msg.payload.unit }}.</div>\n        </div>\n\n        <div class=\"distance\">📍 {{ distance(g.distanciaKm) }} km</div>\n        <div class=\"address\">{{ g.direccion }}<span v-if=\"g.localidad\"><br>{{ g.localidad }}</span></div>\n        <div class=\"hours\" v-if=\"g.horario\">🕒 {{ g.horario }}</div>\n      </article>\n    </div>\n\n    <div class=\"meta\" v-if=\"msg?.payload?.fechaPrecios\">\n      Datos oficiales: {{ msg.payload.fechaPrecios }} · TOP 3 = las tres estaciones físicamente más cercanas. Si una no vende el combustible elegido, se muestra como no disponible.\n    </div>\n\n    <div class=\"map-title\">Mapa</div>\n    <iframe class=\"map\" src=\"/gasolineras-map\" loading=\"lazy\"></iframe>\n  </div>\n</template>\n\n<script>\nexport default {\n  methods: {\n    changeFuel (event) {\n      this.send({ topic: 'fuel', payload: event.target.value })\n    },\n    price (value) {\n      const n = Number(value)\n      return Number.isFinite(n) ? n.toLocaleString('es-ES', {minimumFractionDigits: 3, maximumFractionDigits: 3}) : '—'\n    },\n    distance (value) {\n      const n = Number(value)\n      return Number.isFinite(n) ? n.toLocaleString('es-ES', {minimumFractionDigits: 2, maximumFractionDigits: 2}) : '—'\n    },\n    consumption (value) {\n      const n = Number(value)\n      return Number.isFinite(n) ? n.toLocaleString('es-ES', {minimumFractionDigits: 2, maximumFractionDigits: 2}) : '—'\n    },\n    euro100 (value) {\n      const n = Number(value)\n      return Number.isFinite(n) ? n.toLocaleString('es-ES', {minimumFractionDigits: 2, maximumFractionDigits: 2}) : '—'\n    }\n  }\n}\n</script>\n\n<style scoped>\n.fuel-app { font-family: Inter, system-ui, sans-serif; padding: 6px; }\n.topbar { display:flex; gap:20px; justify-content:space-between; align-items:end; flex-wrap:wrap; margin-bottom:16px; }\n.eyebrow { font-size:11px; letter-spacing:.16em; opacity:.65; font-weight:700; }\nh2 { margin:2px 0 0; font-size:25px; }\n.live-consumption { margin-top:7px; font-size:14px; opacity:.82; }\n.selector-wrap { min-width:260px; }\n.selector-wrap label { display:block; font-size:12px; margin-bottom:5px; opacity:.75; }\nselect { width:100%; padding:10px 12px; border-radius:10px; border:1px solid rgba(128,128,128,.35); background:var(--v-theme-surface, white); color:inherit; font-size:14px; }\n.status { padding:13px 15px; border:1px dashed rgba(128,128,128,.45); border-radius:12px; margin:10px 0 16px; }\n.warning { padding:12px 14px; border:1px solid rgba(230,150,0,.35); background:rgba(230,150,0,.08); border-radius:12px; margin:10px 0 16px; font-size:13px; }\n.cards { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; margin-bottom:12px; }\n.station { position:relative; padding:17px; border:1px solid rgba(128,128,128,.25); border-radius:16px; background:rgba(128,128,128,.06); min-height:285px; }\n.rank { position:absolute; right:14px; top:12px; font-weight:800; font-size:19px; opacity:.55; }\n.brand { padding-right:38px; font-weight:800; font-size:17px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }\n.price { font-size:28px; font-weight:900; margin-top:14px; line-height:1; }\n.price small { font-size:13px; opacity:.7; font-weight:700; }\n.unavailable-price { font-size:22px; opacity:.65; }\n.fuel { font-size:12px; opacity:.68; margin-top:6px; }\n.cost-box { margin-top:14px; padding:11px 12px; border-radius:12px; border:1px solid rgba(128,128,128,.22); background:rgba(128,128,128,.08); }\n.cost-label { font-size:11px; text-transform:uppercase; letter-spacing:.07em; opacity:.62; font-weight:800; }\n.cost { font-size:24px; line-height:1.1; font-weight:900; margin-top:3px; }\n.cost small { font-size:12px; opacity:.72; }\n.cost-na { font-weight:800; margin-top:5px; }\n.formula { font-size:11px; opacity:.62; margin-top:4px; line-height:1.3; }\n.unavailable { opacity:.75; }\n.distance { font-weight:700; margin-top:15px; }\n.address,.hours { font-size:12px; opacity:.72; margin-top:7px; line-height:1.35; }\n.meta { font-size:11px; opacity:.62; margin:8px 2px 14px; }\n.map-title { font-weight:800; font-size:16px; margin:10px 0 8px; }\n.map { width:100%; height:520px; border:0; border-radius:16px; background:#eee; }\n@media (max-width: 900px) { .cards { grid-template-columns:1fr; } .map { height:440px; } }\n</style>",
+        "storeOutMessages": true,
+        "passthru": false,
+        "resendOnRefresh": true,
+        "templateScope": "local",
+        "className": "",
+        "x": 1210,
+        "y": 500,
+        "wires": [
+            [
+                "f100000000000009"
+            ]
+        ]
+    },
+    {
+        "id": "f10000000000000e",
+        "type": "debug",
+        "z": "f100000000000001",
+        "name": "TOP 3 / estado",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "payload",
+        "targetType": "msg",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 1200,
+        "y": 570,
+        "wires": []
+    },
+    {
+        "id": "f10000000000d001",
+        "type": "debug",
+        "z": "f100000000000001",
+        "name": "DEBUG MQTT RAW",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 410,
+        "y": 80,
+        "wires": []
+    },
+    {
+        "id": "f10000000000d0aa",
+        "type": "debug",
+        "z": "f100000000000001",
+        "name": "DEBUG WORLD MAP",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "payload",
+        "targetType": "msg",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 1450,
+        "y": 420,
+        "wires": []
+    },
+    {
+        "id": "f10000000000d0ab",
+        "type": "worldmap in",
+        "z": "f100000000000001",
+        "name": "Mapa abierto / conectado",
+        "path": "/gasolineras-map",
+        "events": "connect",
+        "x": 260,
+        "y": 480,
+        "wires": [
+            [
+                "f10000000000d0ac"
+            ]
+        ]
+    },
+    {
+        "id": "f10000000000d0ac",
+        "type": "function",
+        "z": "f100000000000001",
+        "name": "Redibujar al abrir mapa",
+        "func": "// El worldmap-in emite msg.payload.action = \"connected\" cuando se abre la página.\n// Recalculamos usando GPS, precios y combustible guardados en flow context.\nmsg.topic = \"recalcular-mapa\";\nreturn msg;",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 520,
+        "y": 480,
+        "wires": [
+            [
+                "f10000000000000a"
+            ]
+        ]
+    },
+    {
+        "id": "f100000000000010",
+        "type": "mqtt-broker",
+        "name": "BROKER MQTT",
+        "broker": "localhost",
+        "port": "1883",
+        "clientid": "",
+        "autoConnect": true,
+        "usetls": false,
+        "protocolVersion": "4",
+        "keepalive": "60",
+        "cleansession": true,
+        "autoUnsubscribe": true,
+        "birthTopic": "",
+        "birthQos": "0",
+        "birthPayload": "",
+        "birthMsg": {},
+        "closeTopic": "",
+        "closeQos": "0",
+        "closePayload": "",
+        "closeMsg": {},
+        "willTopic": "",
+        "willQos": "0",
+        "willPayload": "",
+        "willMsg": {},
+        "userProps": "",
+        "sessionExpiry": ""
+    },
+    {
+        "id": "f100000000000013",
+        "type": "ui-group",
+        "name": "Gasolineras cercanas",
+        "page": "f100000000000012",
+        "width": 12,
+        "height": 1,
+        "order": 1,
+        "showTitle": false,
+        "className": "",
+        "visible": true,
+        "disabled": false
+    },
+    {
+        "id": "f100000000000012",
+        "type": "ui-page",
+        "name": "Gasolineras",
+        "ui": "f100000000000011",
+        "path": "/gasolineras",
+        "icon": "local_gas_station",
+        "layout": "grid",
+        "theme": "47cd0a44ad5ca9ee",
+        "breakpoints": [
+            {
+                "name": "Default",
+                "px": "0",
+                "cols": "3"
+            },
+            {
+                "name": "Tablet",
+                "px": "576",
+                "cols": "6"
+            },
+            {
+                "name": "Small Desktop",
+                "px": "768",
+                "cols": "9"
+            },
+            {
+                "name": "Desktop",
+                "px": "1024",
+                "cols": "12"
+            }
+        ],
+        "order": 1,
+        "className": "",
+        "visible": "true",
+        "disabled": "false"
+    },
+    {
+        "id": "f100000000000011",
+        "type": "ui-base",
+        "name": "Gasolineras Dashboard",
+        "path": "/dashboard",
+        "appIcon": "",
+        "includeClientData": true,
+        "acceptsClientConfig": [
+            "ui-notification",
+            "ui-control"
+        ],
+        "showPathInSidebar": false,
+        "headerContent": "page",
+        "navigationStyle": "default",
+        "titleBarStyle": "default",
+        "showReconnectNotification": true,
+        "notificationDisplayTime": 1,
+        "showDisconnectNotification": true
+    },
+    {
+        "id": "47cd0a44ad5ca9ee",
+        "type": "ui-theme",
+        "name": "Theme Name",
+        "colors": {
+            "surface": "#21222c",
+            "primary": "#bd93f9",
+            "bgPage": "#282a36",
+            "groupBg": "#343746",
+            "groupOutline": "#44475a"
+        },
+        "sizes": {
+            "density": "default",
+            "pagePadding": "12px",
+            "groupGap": "12px",
+            "groupBorderRadius": "4px",
+            "widgetGap": "12px"
+        }
+    },
+    {
+        "id": "5f14e7e067cc185b",
+        "type": "global-config",
+        "env": [],
+        "modules": {
+            "node-red-contrib-web-worldmap": "5.8.1",
+            "@flowfuse/node-red-dashboard": "1.31.0"
+        }
+    }
+]
