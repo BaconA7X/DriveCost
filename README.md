@@ -467,3 +467,15 @@ Consumo simulado + GPS
 ```
 
 Esto permite validar cada etapa de comunicación antes de integrar DriveCost con datos reales del vehículo.
+
+
+
+
+## Semántica de producción y consumo
+
+La telemetría producida por DriveCost consiste principalmente en datos frecuentes cuyo valor disminuye rápidamente con el tiempo. Una muestra concreta de velocidad o RPM tiene poca utilidad varios segundos después de haberse producido, especialmente si ya existe una lectura más reciente.
+Por este motivo se ha optado por utilizar QoS 0 (at-most-once) para la telemetría periódica.
+Con QoS 0, el productor envía el mensaje sin requerir confirmación de recepción. Esto reduce el número de mensajes intercambiados, el overhead del protocolo y la latencia.
+Existe la posibilidad de perder alguna muestra ante un problema de red. Sin embargo, para esta aplicación esta pérdida puntual resulta aceptable porque pocos instantes después se genera una nueva muestra.
+
+
