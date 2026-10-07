@@ -7,21 +7,79 @@
 // WIFI
 // =====================================================
 
-const char* WIFI_SSID = "S21+ de Daniel";
-const char* WIFI_PASSWORD = "ypgp1700";
-
+const char* WIFI_SSID = "";
+const char* WIFI_PASSWORD = "";
 // IP DEL PC DONDE ESTA MOSQUITTO
-const char* MQTT_SERVER = "10.136.224.87";
 
+const char* MQTT_SERVER = "";
 const int MQTT_PORT = 1883;
+const char* MQTT_USER = "";
+const char* MQTT_PASSWORD = "";
 
-const char* MQTT_USER = "drivecost";
-const char* MQTT_PASSWORD = "SistemasDistribuidos2026";
+// Topic donde enviamos:
+//
+// {
+//   "latitud": ...,
+//   "longitud": ...,
+//   "consumo": ...
+// }
+//
+// RETAINED:
+// Mosquitto guarda siempre el último mensaje.
+//
+const char* MQTT_TOPIC =
+  "drivecost/telemetry";
 
-const char* MQTT_TOPIC = "drivecost/telemetry";
+
+// Topic de estado del dispositivo
+//
+// {"estado":"online"}
+// {"estado":"offline"}
+//
+const char* MQTT_STATUS_TOPIC =
+  "drivecost/status";
+
+
+// =====================================================
+// LAST WILL TESTAMENT
+// =====================================================
+
+// Mosquitto publicará esto si el ESP32
+// desaparece inesperadamente.
+
+const char* MQTT_WILL_MESSAGE =
+  "{\"estado\":\"offline\"}";
+
+
+// Esto lo publica el propio ESP32
+// cuando consigue conectarse.
+
+const char* MQTT_ONLINE_MESSAGE =
+  "{\"estado\":\"online\"}";
+
+
+// QoS del Last Will
+const int MQTT_WILL_QOS = 1;
+
+
+// Guardar último estado
+const bool MQTT_WILL_RETAIN = true;
+
+
+// =====================================================
+// CLIENTES WIFI / MQTT
+// =====================================================
 
 WiFiClient wifiClient;
+
 PubSubClient mqttClient(wifiClient);
+
+
+// =====================================================
+// DEBUG
+// =====================================================
+
+const bool DEBUG = true;
 
 
 // =====================================================
@@ -31,15 +89,33 @@ PubSubClient mqttClient(wifiClient);
 #define GPS_RX_PIN 21
 #define GPS_TX_PIN 20
 
+
 HardwareSerial GPSSerial(1);
 
+
 char linea[128];
+
 int pos = 0;
 
-double latitudActual = 0.0;
-double longitudActual = 0.0;
 
-bool gpsValido = false;
+// =====================================================
+// UBICACIÓN POR DEFECTO
+// =====================================================
+//
+// Se utiliza hasta que llega
+// la primera ubicación GPS.
+//
+
+double latitudActual =
+  40.389700;
+
+double longitudActual =
+  -3.627894;
+
+
+// true porque queremos utilizar
+// la ubicación por defecto inicialmente
+bool gpsValido = true;
 
 
 // =====================================================
@@ -49,13 +125,14 @@ bool gpsValido = false;
 #define CAN_TX_PIN 22
 #define CAN_RX_PIN 23
 
+
 float consumoActual = 0.0;
 
 bool consumoValido = false;
 
 
 // =====================================================
-// MQTT
+// MQTT - INTERVALO
 // =====================================================
 
 unsigned long ultimoEnvioMQTT = 0;
@@ -64,52 +141,79 @@ const unsigned long INTERVALO_MQTT = 1000;
 
 
 // =====================================================
-// GPS - convertir NMEA a decimal
+// GPS - CONVERTIR NMEA A DECIMAL
 // =====================================================
 
-double nmeaToDecimal(const char *coord, char hemi) {
+double nmeaToDecimal(
+  const char* coord,
+  char hemi
+) {
 
-  double valor = atof(coord);
+  double valor =
+    atof(coord);
 
-  int grados = (int)(valor / 100);
+
+  int grados =
+    (int)(valor / 100);
+
 
   double minutos =
     valor - grados * 100;
 
+
   double decimal =
     grados + minutos / 60.0;
 
-  if (hemi == 'S' || hemi == 'W') {
-    decimal = -decimal;
+
+  if (
+    hemi == 'S' ||
+    hemi == 'W'
+  ) {
+
+    decimal =
+      -decimal;
   }
+
 
   return decimal;
 }
 
 
 // =====================================================
-// GPS - procesar GGA
+// GPS - PROCESAR GGA
 // =====================================================
 
-void procesarGGA(char *trama) {
+void procesarGGA(
+  char* trama
+) {
 
-  char *campos[15];
+  char* campos[15];
 
   int campo = 0;
 
-  campos[campo++] = trama;
+
+  campos[campo++] =
+    trama;
 
 
-  // Separar campos conservando vacíos
+  // -------------------------------------------------
+  // Separar campos conservando campos vacíos
+  // -------------------------------------------------
+
   for (
     int i = 0;
-    trama[i] != '\0' && campo < 15;
+    trama[i] != '\0' &&
+    campo < 15;
     i++
   ) {
 
-    if (trama[i] == ',') {
+    if (
+      trama[i] == ','
+    ) {
 
-      trama[i] = '\0';
+      trama[i] =
+        '\0';
+
 
       campos[campo++] =
         &trama[i + 1];
@@ -117,19 +221,29 @@ void procesarGGA(char *trama) {
   }
 
 
-  if (campo < 7) {
-    return;
-  }
-
-
-  // Campo 6 = calidad FIX
-  if (atoi(campos[6]) == 0) {
-
-    gpsValido = false;
+  if (
+    campo < 7
+  ) {
 
     return;
   }
 
+
+  // -------------------------------------------------
+  // Campo 6 = calidad del FIX
+  // -------------------------------------------------
+
+  if (
+    atoi(campos[6]) == 0
+  ) {
+
+    return;
+  }
+
+
+  // -------------------------------------------------
+  // Comprobar campos GPS
+  // -------------------------------------------------
 
   if (
     strlen(campos[2]) == 0 ||
@@ -138,11 +252,13 @@ void procesarGGA(char *trama) {
     strlen(campos[5]) == 0
   ) {
 
-    gpsValido = false;
-
     return;
   }
 
+
+  // -------------------------------------------------
+  // Latitud
+  // -------------------------------------------------
 
   latitudActual =
     nmeaToDecimal(
@@ -151,6 +267,10 @@ void procesarGGA(char *trama) {
     );
 
 
+  // -------------------------------------------------
+  // Longitud
+  // -------------------------------------------------
+
   longitudActual =
     nmeaToDecimal(
       campos[4],
@@ -158,81 +278,115 @@ void procesarGGA(char *trama) {
     );
 
 
-  gpsValido = true;
+  gpsValido =
+    true;
 
 
-  Serial.print("GPS: ");
+  // -------------------------------------------------
+  // DEBUG
+  // -------------------------------------------------
 
-  Serial.print(
-    latitudActual,
-    6
-  );
+  if (DEBUG) {
 
-  Serial.print(",");
+    Serial.print(
+      "GPS: "
+    );
 
-  Serial.println(
-    longitudActual,
-    6
-  );
+
+    Serial.print(
+      latitudActual,
+      6
+    );
+
+
+    Serial.print(
+      ","
+    );
+
+
+    Serial.println(
+      longitudActual,
+      6
+    );
+  }
 }
 
 
 // =====================================================
-// CAN - iniciar
+// CAN - INICIAR
 // =====================================================
 
 bool iniciarCAN() {
 
   twai_general_config_t g_config =
+
     TWAI_GENERAL_CONFIG_DEFAULT(
+
       (gpio_num_t)CAN_TX_PIN,
+
       (gpio_num_t)CAN_RX_PIN,
+
       TWAI_MODE_NORMAL
     );
 
 
   twai_timing_config_t t_config =
+
     TWAI_TIMING_CONFIG_500KBITS();
 
 
   twai_filter_config_t f_config =
+
     TWAI_FILTER_CONFIG_ACCEPT_ALL();
 
 
   esp_err_t err =
+
     twai_driver_install(
+
       &g_config,
+
       &t_config,
+
       &f_config
     );
 
 
-  if (err != ESP_OK) {
+  if (
+    err != ESP_OK
+  ) {
 
     Serial.print(
       "Error instalando CAN: "
     );
 
+
     Serial.println(
       esp_err_to_name(err)
     );
+
 
     return false;
   }
 
 
-  err = twai_start();
+  err =
+    twai_start();
 
 
-  if (err != ESP_OK) {
+  if (
+    err != ESP_OK
+  ) {
 
     Serial.print(
       "Error iniciando CAN: "
     );
 
+
     Serial.println(
       esp_err_to_name(err)
     );
+
 
     return false;
   }
@@ -248,7 +402,7 @@ bool iniciarCAN() {
 
 
 // =====================================================
-// CAN - leer consumo
+// CAN - LEER CONSUMO
 // =====================================================
 
 void leerCAN() {
@@ -257,22 +411,36 @@ void leerCAN() {
 
 
   while (
+
     twai_receive(
+
       &mensaje,
+
       0
+
     ) == ESP_OK
+
   ) {
 
 
     if (
+
       mensaje.identifier == 0x100 &&
+
       mensaje.data_length_code >= 2
+
     ) {
 
 
       uint16_t valor =
-        ((uint16_t)mensaje.data[0] << 8)
+
+        (
+          (uint16_t)mensaje.data[0]
+          << 8
+        )
+
         |
+
         mensaje.data[1];
 
 
@@ -280,19 +448,27 @@ void leerCAN() {
         valor / 100.0;
 
 
-      consumoValido = true;
+      consumoValido =
+        true;
 
 
-      Serial.print("Consumo: ");
+      if (DEBUG) {
 
-      Serial.print(
-        consumoActual,
-        2
-      );
+        Serial.print(
+          "Consumo: "
+        );
 
-      Serial.println(
-        " L/100km"
-      );
+
+        Serial.print(
+          consumoActual,
+          2
+        );
+
+
+        Serial.println(
+          " L/100km"
+        );
+      }
     }
   }
 }
@@ -310,13 +486,19 @@ void conectarWiFi() {
 
 
   WiFi.begin(
+
     WIFI_SSID,
+
     WIFI_PASSWORD
+
   );
 
 
   while (
-    WiFi.status() != WL_CONNECTED
+
+    WiFi.status()
+    != WL_CONNECTED
+
   ) {
 
     delay(500);
@@ -327,6 +509,7 @@ void conectarWiFi() {
 
   Serial.println();
 
+
   Serial.println(
     "WiFi conectado"
   );
@@ -335,6 +518,7 @@ void conectarWiFi() {
   Serial.print(
     "IP ESP32: "
   );
+
 
   Serial.println(
     WiFi.localIP()
@@ -357,33 +541,110 @@ void conectarMQTT() {
     );
 
 
+    // -------------------------------------------------
+    // CLIENT ID ESTABLE
+    // -------------------------------------------------
+    //
+    // Cada ESP32 tendrá un Client ID
+    // único basado en su MAC.
+    //
+
     String clientId =
       "DriveCost-";
 
     clientId +=
-      String(
-        random(0xffff),
-        HEX
+      WiFi.macAddress();
+
+
+    // Quitamos ':' de la MAC
+
+    clientId.replace(
+      ":",
+      ""
+    );
+
+
+    // -------------------------------------------------
+    // CONEXIÓN MQTT CON LAST WILL
+    // -------------------------------------------------
+
+    bool conectado =
+
+      mqttClient.connect(
+
+        clientId.c_str(),
+
+        MQTT_USER,
+
+        MQTT_PASSWORD,
+
+        // Topic LWT
+        MQTT_STATUS_TOPIC,
+
+        // QoS
+        MQTT_WILL_QOS,
+
+        // Retained
+        MQTT_WILL_RETAIN,
+
+        // Mensaje Last Will
+        MQTT_WILL_MESSAGE
       );
 
 
     if (
-      mqttClient.connect(
-      clientId.c_str(),
-      MQTT_USER,
-      MQTT_PASSWORD
-      )
+      conectado
     ) {
 
       Serial.println(
         " conectado"
       );
 
+
+      // ===============================================
+      // PUBLICAR ONLINE
+      // ===============================================
+      //
+      // También retained.
+      //
+      // Esto sustituye cualquier
+      // "offline" anterior almacenado.
+      //
+
+      bool resultadoEstado =
+
+        mqttClient.publish(
+
+          MQTT_STATUS_TOPIC,
+
+          MQTT_ONLINE_MESSAGE,
+
+          true
+        );
+
+
+      if (
+        resultadoEstado
+      ) {
+
+        Serial.println(
+          "MQTT STATUS -> ONLINE"
+        );
+
+      } else {
+
+        Serial.println(
+          "ERROR publicando estado ONLINE"
+        );
+      }
+
+
     } else {
 
       Serial.print(
-        " ERROR: "
+        " ERROR MQTT: "
       );
+
 
       Serial.println(
         mqttClient.state()
@@ -397,13 +658,23 @@ void conectarMQTT() {
 
 
 // =====================================================
-// MQTT - enviar telemetría
+// MQTT - ENVIAR TELEMETRÍA
 // =====================================================
 
 void enviarMQTT() {
 
-  // No enviamos hasta tener GPS válido
-  if (!gpsValido) {
+  // -------------------------------------------------
+  // Necesitamos una posición válida
+  // -------------------------------------------------
+  //
+  // Inicialmente tenemos la ubicación
+  // por defecto.
+  //
+
+  if (
+    !gpsValido
+  ) {
+
     return;
   }
 
@@ -411,8 +682,14 @@ void enviarMQTT() {
   char payload[200];
 
 
+  // -------------------------------------------------
+  // CREAR JSON
+  // -------------------------------------------------
+
   snprintf(
+
     payload,
+
     sizeof(payload),
 
     "{\"latitud\":%.6f,"
@@ -420,27 +697,52 @@ void enviarMQTT() {
     "\"consumo\":%.2f}",
 
     latitudActual,
+
     longitudActual,
+
     consumoActual
+
   );
 
 
+  // =================================================
+  // PUBLICAR TELEMETRÍA
+  // =================================================
+  //
+  // El TRUE activa RETAIN.
+  //
+  // Esto hace que Mosquitto conserve
+  // siempre la última telemetría.
+  //
+
   bool resultado =
+
     mqttClient.publish(
+
       MQTT_TOPIC,
-      payload
+
+      payload,
+
+      true
     );
 
 
-  if (resultado) {
+  if (
+    resultado
+  ) {
 
-    Serial.print(
-      "MQTT -> "
-    );
+    if (DEBUG) {
 
-    Serial.println(
-      payload
-    );
+      Serial.print(
+        "MQTT -> "
+      );
+
+
+      Serial.println(
+        payload
+      );
+    }
+
 
   } else {
 
@@ -457,34 +759,46 @@ void enviarMQTT() {
 
 void setup() {
 
-  Serial.begin(115200);
+  Serial.begin(
+    115200
+  );
 
-  delay(1000);
+
+  delay(
+    1000
+  );
 
 
   Serial.println();
+
   Serial.println(
     "=== DriveCost ==="
   );
 
 
-  // ---------------------------
+  // =================================================
   // GPS
-  // ---------------------------
+  // =================================================
 
   GPSSerial.begin(
+
     9600,
+
     SERIAL_8N1,
+
     GPS_RX_PIN,
+
     GPS_TX_PIN
   );
 
 
-  // ---------------------------
+  // =================================================
   // CAN
-  // ---------------------------
+  // =================================================
 
-  if (!iniciarCAN()) {
+  if (
+    !iniciarCAN()
+  ) {
 
     Serial.println(
       "No se pudo iniciar CAN"
@@ -492,20 +806,37 @@ void setup() {
   }
 
 
-  // ---------------------------
-  // WiFi
-  // ---------------------------
+  // =================================================
+  // WIFI
+  // =================================================
 
   conectarWiFi();
 
 
-  // ---------------------------
+  // =================================================
   // MQTT
-  // ---------------------------
+  // =================================================
 
   mqttClient.setServer(
+
     MQTT_SERVER,
+
     MQTT_PORT
+
+  );
+
+
+  // =================================================
+  // MQTT KEEP ALIVE
+  // =================================================
+  //
+  // Si Mosquitto deja de recibir tráfico
+  // durante este periodo, detectará antes
+  // que el ESP32 ha desaparecido.
+  //
+
+  mqttClient.setKeepAlive(
+    10
   );
 
 
@@ -519,62 +850,104 @@ void setup() {
 
 void loop() {
 
-  // ===================================================
-  // Mantener WiFi
-  // ===================================================
+
+  // =================================================
+  // MANTENER WIFI
+  // =================================================
 
   if (
-    WiFi.status() != WL_CONNECTED
+
+    WiFi.status()
+    != WL_CONNECTED
+
   ) {
 
     conectarWiFi();
   }
 
 
-  // ===================================================
-  // Mantener MQTT
-  // ===================================================
+  // =================================================
+  // MANTENER MQTT
+  // =================================================
 
   if (
+
     !mqttClient.connected()
+
   ) {
 
     conectarMQTT();
   }
 
 
+  // PubSubClient necesita ejecutar loop()
+  // constantemente para mantener
+  // viva la conexión.
+
   mqttClient.loop();
 
 
-  // ===================================================
-  // Leer GPS
-  // ===================================================
+  // =================================================
+  // LEER GPS
+  // =================================================
 
   while (
+
     GPSSerial.available()
+
   ) {
+
 
     char c =
       GPSSerial.read();
 
 
-    if (c == '\n') {
+    if (
+      c == '\n'
+    ) {
 
-      linea[pos] = '\0';
+      linea[pos] =
+        '\0';
 
 
       if (
+        DEBUG
+      ) {
+
+        Serial.println(
+          linea
+        );
+      }
+
+
+      // -----------------------------------------------
+      // GPGGA o GNGGA
+      // -----------------------------------------------
+
+      if (
+
         strncmp(
+
           linea,
+
           "$GPGGA",
+
           6
+
         ) == 0
+
         ||
+
         strncmp(
+
           linea,
+
           "$GNGGA",
+
           6
+
         ) == 0
+
       ) {
 
         procesarGGA(
@@ -585,19 +958,28 @@ void loop() {
 
       pos = 0;
 
+
     } else if (
+
       c != '\r'
+
     ) {
 
 
       if (
+
         pos <
         sizeof(linea) - 1
+
       ) {
 
-        linea[pos++] = c;
+        linea[pos++] =
+          c;
+
 
       } else {
+
+        // Evitar overflow
 
         pos = 0;
       }
@@ -605,24 +987,30 @@ void loop() {
   }
 
 
-  // ===================================================
-  // Leer CAN
-  // ===================================================
+  // =================================================
+  // LEER CAN
+  // =================================================
 
   leerCAN();
 
 
-  // ===================================================
-  // Enviar MQTT cada segundo
-  // ===================================================
+  // =================================================
+  // ENVIAR MQTT CADA SEGUNDO
+  // =================================================
 
   unsigned long ahora =
     millis();
 
 
   if (
-    ahora - ultimoEnvioMQTT
-    >= INTERVALO_MQTT
+
+    ahora -
+    ultimoEnvioMQTT
+
+    >=
+
+    INTERVALO_MQTT
+
   ) {
 
     ultimoEnvioMQTT =
