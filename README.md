@@ -499,7 +499,7 @@ Por último, la solución se ha validado a pequeña escala, con un único vehíc
 En conjunto, DriveCost cumple el objetivo de demostrar el funcionamiento de una arquitectura distribuida para la recepción, procesamiento y visualización de datos relacionados con un vehículo, al mismo tiempo que deja abiertas distintas líneas de mejora para una futura implementación más cercana a un entorno real.
 
 
-##Trabajo futuro
+## Trabajo futuro
 
 Como línea principal de trabajo futuro, se plantea sustituir la simulación actual por la obtención de datos directamente desde un vehículo real. Para ello, el consumo podría obtenerse mediante CAN u OBD-II, mientras que la posición seguiría obteniéndose a partir de un sistema GPS.
 También se plantea ampliar el sistema para trabajar con varios vehículos de forma simultánea. La organización actual de los topics MQTT se ha diseñado teniendo en cuenta esta posibilidad, por lo que cada vehículo podría publicar sus datos de forma independiente utilizando un identificador propio.
