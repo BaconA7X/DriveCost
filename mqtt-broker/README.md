@@ -1,3 +1,12 @@
+## Problema a resolver y motivación
+
+El objetivo del proyecto es desarrollar un sistema distribuido capaz de recibir, procesar y visualizar información asociada al funcionamiento de uno o varios vehículos en tiempo real. La aplicación, denominada DriveCost, se centra principalmente en la monitorización de parámetros como la velocidad, las revoluciones por minuto, el nivel de combustible y el consumo estimado del vehículo.
+La motivación principal surge de la posibilidad de disponer de esta información de forma centralizada y accesible mediante un dashboard, evitando que cada consumidor tenga que comunicarse directamente con el vehículo. Para ello se ha utilizado una arquitectura orientada a eventos basada en el paradigma publish/subscribe, empleando MQTT como mecanismo principal de comunicación.
+En un escenario real, los datos podrían obtenerse directamente de la electrónica del vehículo mediante un dispositivo conectado al bus CAN o a la interfaz OBD-II. No obstante, para el desarrollo y demostración del proyecto se ha optado por simular parte de esta telemetría, permitiendo reproducir de forma controlada distintos estados de conducción sin depender de la disponibilidad de un vehículo real.
+Esta decisión permite centrar el trabajo en los aspectos relacionados con los sistemas distribuidos: generación de eventos, comunicación desacoplada, identificación de productores, procesamiento de información y consumo de los datos desde diferentes componentes.
+Aunque la demostración se realice inicialmente con un único vehículo, la arquitectura y especialmente la organización de los topics MQTT han sido diseñadas para admitir múltiples vehículos sin necesidad de modificar el modelo general de comunicación.
+
+
 # DriveCost — MQTT Broker
 
 DriveCost utiliza **Eclipse Mosquitto** como broker MQTT para recibir la telemetría enviada por el ESP32.
