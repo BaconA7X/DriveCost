@@ -409,7 +409,7 @@
         "type": "function",
         "z": "f100000000000001",
         "name": "Validar estado",
-        "func": "const estado = String(msg.payload || '').trim().toLowerCase();\n\nif (estado !== 'online' && estado !== 'offline') {\n    node.warn('Estado desconocido: ' + estado);\n    return null;\n}\n\nnode.status({\n    fill: estado === 'online' ? 'green' : 'red',\n    shape: 'dot',\n    text: estado\n});\n\nmsg.payload = estado;\nreturn msg;",
+        "func": "// Acepta {\"estado\":\"online\"} (firmware) y también texto plano\nlet p = msg.payload;\nif (Buffer.isBuffer(p)) p = p.toString('utf8');\nif (typeof p === 'string') {\n    try { p = JSON.parse(p); } catch (e) { /* texto plano */ }\n}\n\nconst valor = (p && typeof p === 'object') ? p.estado : p;\nconst estado = String(valor || '').trim().toLowerCase();\n\nif (estado !== 'online' && estado !== 'offline') {\n    node.warn('Estado desconocido: ' + estado);\n    return null;\n}\n\nnode.status({\n    fill: estado === 'online' ? 'green' : 'red',\n    shape: 'dot',\n    text: estado\n});\n\nmsg.payload = estado;\nreturn msg;",
         "outputs": 1,
         "timeout": 0,
         "noerr": 0,
